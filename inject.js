@@ -11,12 +11,18 @@ function extractFields() {
   const SELECTOR =
     'input, textarea, select, [contenteditable="true"], ' +
     '[role="textbox"], [role="combobox"], [aria-haspopup="listbox"], ' +
-    '[role="radio"], [role="checkbox"], [role="switch"]';
+    '[role="radio"], [role="checkbox"], [role="switch"], [aria-pressed], ' +
+    // button-based choices, only inside a question group (guarded further in isChoice):
+    '[role="radiogroup"] button, [role="group"] button, fieldset button, ' +
+    '[role="radiogroup"] [role="button"], [role="group"] [role="button"], fieldset [role="button"]';
   const SKIP = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
 
   const NATIVE = 'input, textarea, select';
   // Option text that is actually a file/resume — never a fillable choice question.
   const FILE_RE = /\.(pdf|docx?|rtf|txt|pptx?|xlsx?|csv|png|jpe?g|gif|zip)\b/i;
+  // Buttons whose text means "do an action" (never a choice option).
+  const ACTION_RE =
+    /^(submit|next|back|prev|previous|continue|save|cancel|apply|upload|add|remove|delete|edit|search|clear|close|skip|browse|choose file|log ?in|sign ?in|sign ?up|review|done|confirm)/i;
 
   function isWidget(el) {
     const role = el.getAttribute('role');
@@ -76,21 +82,59 @@ function extractFields() {
       const l = document.getElementById(el.getAttribute('aria-labelledby'));
       if (l) label = l.textContent || '';
     }
-    if (!label) label = el.getAttribute('placeholder') || '';
-    // For custom (non-native) widgets, the element's own text is often the option label,
-    // e.g. <div role="radio">Yes</div>.
-    if (!label && !el.matches(NATIVE)) label = el.textContent || '';
+    // A visible title/question above the field identifies it far better than the placeholder.
+    // Climb into the field's OWN group (a container holding just this one control) and take the
+    // closest preceding text. Stop as soon as a container holds >1 control — that means we've
+    // left this field's group and would otherwise grab a neighbouring field's title.
     if (!label) {
-      const prev = el.previousElementSibling;
-      if (prev) label = prev.textContent || '';
+      const CTRL = 'input, select, textarea, [role="combobox"], [role="radio"], [role="checkbox"]';
+      let node = el;
+      for (let d = 0; d < 5; d++) {
+        const parent = node.parentElement;
+        if (!parent || parent.querySelectorAll(CTRL).length > 1) break;
+        node = parent;
+        const kids = Array.from(node.children);
+        const idx = kids.findIndex((k) => k === el || k.contains(el));
+        let found = '';
+        for (let i = 0; i < idx; i++) {
+          const k = kids[i];
+          if (k.matches('input, select, textarea, button') || k.querySelector('input, select, textarea, button')) continue;
+          const t = (k.textContent || '').replace(/\s+/g, ' ').trim();
+          if (t) found = t; // keep the closest title to the control
+        }
+        if (found) {
+          label = found;
+          break;
+        }
+      }
     }
+    // Custom (non-native) widgets: their own text is often the label, e.g. <div role="radio">Yes</div>.
+    if (!label && !el.matches(NATIVE)) label = el.textContent || '';
+    // Placeholder is only a hint ("Start typing…") — use it as the LAST resort.
+    if (!label) label = el.getAttribute('placeholder') || '';
     return label;
   }
 
   function isChoice(el) {
     const t = (el.getAttribute('type') || '').toLowerCase();
     const r = el.getAttribute('role');
-    return t === 'radio' || t === 'checkbox' || r === 'radio' || r === 'checkbox' || r === 'switch';
+    if (t === 'radio' || t === 'checkbox' || r === 'radio' || r === 'checkbox' || r === 'switch') return true;
+    if (el.hasAttribute('aria-pressed')) return true;
+    // A <button>/role=button is a choice ONLY when it's one of 2+ short options inside a
+    // question group — that's a Yes/No toggle, not a lone action button or a file list.
+    if (el.tagName === 'BUTTON' || r === 'button') {
+      const grp = el.closest('[role="radiogroup"], [role="group"], fieldset');
+      if (!grp) return false;
+      const own = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!own || own.length > 40 || ACTION_RE.test(own) || FILE_RE.test(own)) return false;
+      let opts = 0;
+      for (const b of grp.querySelectorAll('button, [role="button"]')) {
+        const tx = (b.textContent || '').replace(/\s+/g, ' ').trim();
+        if (tx && tx.length <= 40 && !ACTION_RE.test(tx) && !FILE_RE.test(tx)) opts++;
+      }
+      return opts >= 2;
+    }
+    return false;
   }
 
   // The SHORT label for one choice option ("Yes"), distinct from the group's question.
@@ -276,16 +320,25 @@ async function fillFields(mappings) {
   // A search box that appears inside an opened panel is often a DIFFERENT element than the
   // trigger you clicked (Workday/Thingtrax location pickers do this). Find it so we type there.
   function findSearchInput(trigger) {
+    // Widgets usually auto-focus their search box the moment it opens — use it if so.
+    const active = document.activeElement;
+    if (
+      active && active !== trigger && visible(active) &&
+      (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)
+    ) {
+      return active;
+    }
     const inputs = Array.from(
       document.querySelectorAll(
-        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])',
+        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]), textarea, [contenteditable="true"]',
       ),
     ).filter(visible).filter((i) => i !== trigger);
-    // Prefer one that lives inside a freshly-opened container.
+    // Prefer one that lives inside a freshly-opened panel.
     return (
       inputs.find((i) =>
         i.closest(
-          '[aria-expanded="true"], [role="dialog"], [role="listbox"], [class*="open"], [class*="menu"], [class*="popover"], [class*="dropdown"]',
+          '[aria-expanded="true"], [role="dialog"], [role="listbox"], [class*="open"], [class*="menu"], ' +
+            '[class*="popover"], [class*="dropdown"], [class*="typeahead"], [class*="search"], [class*="autocomplete"]',
         ),
       ) || null
     );
@@ -313,7 +366,7 @@ async function fillFields(mappings) {
     // Decide where to type: the trigger itself, or a search box that appears in the panel.
     let typeEl = el.tagName === 'INPUT' || el.isContentEditable ? el : null;
     if (!typeEl) {
-      await sleep(150); // let a popup search input render
+      await sleep(220); // let the popup search box render and take focus
       typeEl = findSearchInput(el);
     }
     if (typeEl) typeInto(typeEl, value);
@@ -381,13 +434,15 @@ async function fillFields(mappings) {
         if (match) { el.value = match.value; fireInput(el); ok = true; }
       } else if (
         type === 'checkbox' || type === 'radio' ||
-        role === 'radio' || role === 'checkbox' || role === 'switch'
+        role === 'radio' || role === 'checkbox' || role === 'switch' ||
+        el.hasAttribute('aria-pressed') || tag === 'button' || role === 'button'
       ) {
         const native = type === 'checkbox' || type === 'radio';
         const desired = /^(true|yes|on|1|checked|selected)$/i.test(value.trim());
         let current = false;
         if (native) current = el.checked;
         else if (el.hasAttribute('aria-checked')) current = el.getAttribute('aria-checked') === 'true';
+        else if (el.hasAttribute('aria-pressed')) current = el.getAttribute('aria-pressed') === 'true';
         // Click to change state (fires native events). Only ever click to turn ON — the
         // model / user picks one option, and we never toggle another off.
         if (current !== desired && (desired || native)) el.click();

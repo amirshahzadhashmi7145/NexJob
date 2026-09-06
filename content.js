@@ -38,21 +38,22 @@
   // max z-index, win on DOM order — hiding/blocking our button. Keep our host the LAST
   // element in <html> so it always stays clickable above late-added overlays. The interval
   // covers libraries that re-append their own modal after us.
-  // Minimal footprint: our host lives as a child of <html>, outside the page's React root.
-  // We DON'T fight for stacking order or re-append on a timer (that churn is what irritates
-  // React SPAs). We only put the node back if the page removes it, and we shut down cleanly
-  // if this script is ever orphaned by an extension reload.
-  let obs = null;
-  function guard() {
-    if (!alive()) {
-      if (obs) obs.disconnect();
-      if (host.parentNode) host.remove();
-      return;
-    }
-    if (!host.isConnected) document.documentElement.appendChild(host);
+  // Zero recurring work: append the host ONCE and never observe/poll the page. No timers,
+  // no MutationObserver — so even if this script is ever orphaned by an extension reload,
+  // there is nothing running to loop or spam errors. (If a SPA later removes our node, the
+  // button just disappears until the next page load — an acceptable trade for never hanging.)
+
+  // Re-assert as the last element of <html> so we paint above modals opened after us. Called
+  // ONLY on user actions (fill click, panel open) — event-driven, never on a loop.
+  function bringToTop() {
+    try {
+      if (host.isConnected && document.documentElement.lastElementChild !== host) {
+        document.documentElement.appendChild(host);
+      } else if (!host.isConnected) {
+        document.documentElement.appendChild(host);
+      }
+    } catch {}
   }
-  obs = new MutationObserver(guard);
-  obs.observe(document.documentElement, { childList: true });
 
   shadow.innerHTML = `
     <style>
@@ -138,6 +139,7 @@
 
   // ---- flow --------------------------------------------------------------
   async function runFill() {
+    bringToTop(); // make sure our UI is above any modal opened after page load
     panel.classList.remove('show');
     const s = await send({ type: 'settings' });
     if (!s.ok) return toast('Extension error — try reloading it.', 'err');
@@ -254,6 +256,7 @@
       wrap.appendChild(opts);
       listEl.appendChild(wrap);
     }
+    bringToTop();
     panel.classList.add('show');
   }
 

@@ -67,6 +67,7 @@ async function mapFields(apiKey, profile, fields) {
 
   const body = {
     model: 'gpt-4o-mini',
+    temperature: 0.2, // low randomness — mostly consistent run-to-run with a little flexibility
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: JSON.stringify({ profile, fields }) },
@@ -120,6 +121,7 @@ async function planActions(apiKey, field, value, html) {
 
   const body = {
     model: 'gpt-4o-mini',
+    temperature: 0.2, // low randomness — mostly consistent run-to-run with a little flexibility
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: JSON.stringify({ label: field?.label, value, html }) },
