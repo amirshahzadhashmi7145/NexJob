@@ -44,6 +44,26 @@
         <option value="No">No</option>
       </select>
 
+      <!-- custom dropdown (ARIA combobox + role=option list) — NOT a native <select>.
+           This is the widget type Workday/Greenhouse/React-Select build. The extension
+           opens it, waits for options, and clicks the match. -->
+      <span id="country-lbl">Country</span>
+      <div id="country" role="combobox" aria-haspopup="listbox" aria-expanded="false"
+           aria-labelledby="country-lbl" tabindex="0"
+           style="border:1px solid #999; padding:6px; cursor:pointer;">Select…</div>
+      <ul id="country-list" role="listbox" hidden style="border:1px solid #ccc; margin:0; padding:0; list-style:none;">
+        <li role="option" style="padding:6px; cursor:pointer;">United States</li>
+        <li role="option" style="padding:6px; cursor:pointer;">United Kingdom</li>
+        <li role="option" style="padding:6px; cursor:pointer;">Pakistan</li>
+      </ul>
+
+      <!-- radio group: question comes from the <legend> -->
+      <fieldset>
+        <legend>Available to start immediately?</legend>
+        <label><input type="radio" name="startnow" value="yes" /> Yes</label>
+        <label><input type="radio" name="startnow" value="no" /> No</label>
+      </fieldset>
+
       <!-- textarea -->
       <label for="why">Why do you want this role?</label>
       <textarea id="why" name="why" rows="3"></textarea>
@@ -54,6 +74,20 @@
     </form>
 
     <div id="result"></div>
+
+    <!-- Wire the demo custom dropdown: click to open, click an option to select. -->
+    <script>
+      (function wireCombobox() {
+        const cb = document.getElementById('country');
+        const list = document.getElementById('country-list');
+        const open = () => { list.hidden = false; cb.setAttribute('aria-expanded', 'true'); };
+        const close = () => { list.hidden = true; cb.setAttribute('aria-expanded', 'false'); };
+        cb.addEventListener('click', () => (list.hidden ? open() : close()));
+        list.querySelectorAll('[role="option"]').forEach((opt) => {
+          opt.addEventListener('click', () => { cb.textContent = opt.textContent; close(); });
+        });
+      })();
+    </script>
 
     <!-- Reuse the exact functions the extension injects — no duplicated logic. -->
     <script src="inject.js"></script>
@@ -67,12 +101,18 @@
         const checks = [];
         const expect = (name, cond) => checks.push({ name, ok: !!cond });
 
-        expect('found exactly 6 fillable fields (hidden + submit skipped)', fields.length === 6);
+        expect('found exactly 9 fillable fields (hidden + submit skipped)', fields.length === 9);
         expect('every field resolved a non-empty label', fields.every((f) => f.label.length > 0));
         expect('email label reads "Email address"', fields.find((f) => f.name === 'email')?.label === 'Email address');
         expect('phone label came from aria-label', fields.find((f) => f.name === 'phone')?.label === 'Phone number');
         expect('city label came from placeholder', fields.find((f) => f.name === 'city')?.label === 'City');
         expect('relocate select exposes its options', (fields.find((f) => f.name === 'relocate')?.options || []).includes('Yes'));
+        const country = fields.find((f) => f.id === 'country');
+        expect('custom dropdown flagged as widget', country?.widget === true);
+        expect('custom dropdown label via aria-labelledby', country?.label === 'Country');
+        const startYes = fields.find((f) => f.name === 'startnow' && f.optionValue === 'yes');
+        expect('radio label includes its group question', startYes?.label === 'Available to start immediately? — Yes');
+        expect('radios carry a choiceGroup', startYes?.choiceGroup === 'startnow');
         expect('every field got a data-af-id', fields.every((f) => document.querySelector('[data-af-id="' + f.af_id + '"]')));
 
         const failed = checks.filter((c) => !c.ok);

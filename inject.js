@@ -1,32 +1,44 @@
 // inject.js
 // These two functions run INSIDE the target web page (via chrome.scripting.executeScript).
 // They are also loaded by popup.html (so popup.js can reference them by name) and by
-// test-form.html (for the self-check). They must not depend on anything outside the page:
-// no imports, no closures — only the DOM and standard browser globals.
+// test-form.html (for the self-check). They must be SELF-CONTAINED: chrome.scripting
+// serializes only the named function, so every helper is nested inside it. No imports,
+// no closures over module scope — only the DOM and standard browser globals.
 
 // Scan the page for fillable form fields and return a plain-data descriptor for each.
 // Stamps every field with data-af-id="n" so fillFields can target it later.
 function extractFields() {
-  const SKIP = new Set([
-    'hidden', 'submit', 'button', 'reset', 'image', 'password', 'file', 'search',
-  ]);
-  const els = document.querySelectorAll('input, textarea, select');
-  const fields = [];
-  let i = 0;
+  const SELECTOR =
+    'input, textarea, select, [contenteditable="true"], ' +
+    '[role="textbox"], [role="combobox"], [aria-haspopup="listbox"]';
+  const SKIP = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
 
-  for (const el of els) {
-    const type = (el.getAttribute('type') || el.tagName).toLowerCase();
-    if (SKIP.has(type)) continue;
-    if (el.disabled || el.readOnly) continue;
+  function isWidget(el) {
+    const role = el.getAttribute('role');
+    return (
+      role === 'combobox' ||
+      role === 'listbox' ||
+      el.getAttribute('aria-haspopup') === 'listbox' ||
+      el.getAttribute('aria-autocomplete') != null
+    );
+  }
 
-    // Skip invisible fields.
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) continue;
+  // The question a radio/checkbox belongs to (the group label), so the model sees
+  // "Willing to relocate?" instead of a bare "Yes".
+  function groupQuestion(el) {
+    const fs = el.closest('fieldset');
+    const legend = fs && fs.querySelector('legend');
+    if (legend && legend.textContent.trim()) return legend.textContent;
+    const grp = el.closest('[role="radiogroup"], [role="group"]');
+    if (grp && grp.getAttribute('aria-label')) return grp.getAttribute('aria-label');
+    if (grp && grp.getAttribute('aria-labelledby')) {
+      const l = document.getElementById(grp.getAttribute('aria-labelledby'));
+      if (l) return l.textContent;
+    }
+    return '';
+  }
 
-    const afId = String(i++);
-    el.setAttribute('data-af-id', afId);
-
-    // Resolve a human-readable label, best source first.
+  function resolveLabel(el) {
     let label = '';
     if (el.labels && el.labels.length) label = el.labels[0].textContent || '';
     if (!label && el.id) {
@@ -38,24 +50,67 @@ function extractFields() {
       if (wrap) label = wrap.textContent || '';
     }
     if (!label) label = el.getAttribute('aria-label') || '';
+    if (!label && el.getAttribute('aria-labelledby')) {
+      const l = document.getElementById(el.getAttribute('aria-labelledby'));
+      if (l) label = l.textContent || '';
+    }
     if (!label) label = el.getAttribute('placeholder') || '';
     if (!label) {
       const prev = el.previousElementSibling;
       if (prev) label = prev.textContent || '';
     }
+    return label;
+  }
+
+  const fields = [];
+  const seen = new Set();
+  let i = 0;
+
+  for (const el of document.querySelectorAll(SELECTOR)) {
+    if (seen.has(el)) continue; // one element can match the selector twice
+    seen.add(el);
+
+    const type = (el.getAttribute('type') || el.tagName).toLowerCase();
+    if (SKIP.has(type)) continue;
+    if (el.disabled || el.readOnly) continue;
+
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue; // invisible
+
+    const afId = String(i++);
+    el.setAttribute('data-af-id', afId);
+
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute('role') || '';
+    const isChoice = type === 'radio' || type === 'checkbox';
+
+    let label = resolveLabel(el);
+    if (isChoice) {
+      const q = groupQuestion(el).replace(/\s+/g, ' ').trim();
+      const own = label.replace(/\s+/g, ' ').trim() || el.value || '';
+      label = q ? q + ' — ' + own : own;
+    }
     label = label.replace(/\s+/g, ' ').trim().slice(0, 200);
 
     const field = {
       af_id: afId,
-      tag: el.tagName.toLowerCase(),
+      tag,
       type,
+      role,
+      widget: tag !== 'select' && isWidget(el), // custom dropdown / autocomplete
       name: el.getAttribute('name') || '',
       id: el.id || '',
       label,
-      currentValue: (el.value || '').slice(0, 100),
+      required: el.required || el.getAttribute('aria-required') === 'true',
+      currentValue: (el.value || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100),
     };
 
-    if (el.tagName.toLowerCase() === 'select') {
+    if (isChoice) {
+      field.choiceGroup = el.getAttribute('name') || '';
+      field.optionValue = el.value;
+    }
+
+    if (tag === 'select') {
       field.options = Array.from(el.options)
         .map((o) => (o.value || o.textContent || '').trim())
         .filter(Boolean)
@@ -68,9 +123,91 @@ function extractFields() {
   return fields;
 }
 
-// Apply the AI's field->value mappings to the page. Fires input+change events so
-// framework-managed forms (React/Vue/Angular) register the change. Never submits.
-function fillFields(mappings) {
+// Apply the AI's field->value mappings to the page. Handles native controls directly and
+// custom dropdown/autocomplete widgets by opening them, waiting for options, and clicking
+// the match. Async: chrome.scripting.executeScript awaits the returned promise.
+// Never submits.
+//
+// ponytail: the widget path targets the STANDARD ARIA combobox/listbox pattern (role=option
+// in an opened listbox, portal-rendered lists included). Bespoke widgets that don't emit
+// role="option" may need a per-site selector added to openOptions() — upgrade there.
+async function fillFields(mappings) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const norm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase();
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+
+  // React/Vue override the value setter; set through the prototype so the change "sticks".
+  function setNativeValue(el, value) {
+    const proto = el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) desc.set.call(el, value);
+    else el.value = value;
+  }
+
+  function fireInput(el) {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function pressKey(el, key) {
+    for (const t of ['keydown', 'keyup']) {
+      el.dispatchEvent(new KeyboardEvent(t, { key, code: key, bubbles: true }));
+    }
+  }
+
+  function openOptions() {
+    let opts = Array.from(document.querySelectorAll('[role="option"]')).filter(visible);
+    if (!opts.length) {
+      opts = Array.from(
+        document.querySelectorAll('[role="listbox"] li, ul[role="listbox"] li, .select__option'),
+      ).filter(visible);
+    }
+    return opts;
+  }
+
+  async function waitForOptions(timeout) {
+    const start = Date.now();
+    let opts = [];
+    while (Date.now() - start < timeout) {
+      opts = openOptions();
+      if (opts.length) return opts;
+      await sleep(80);
+    }
+    return opts;
+  }
+
+  async function fillWidget(el, value) {
+    el.focus();
+    el.click(); // open the dropdown
+    // Autocomplete text inputs need the value typed to trigger suggestions.
+    if (el.tagName === 'INPUT') {
+      setNativeValue(el, value);
+      fireInput(el);
+    } else if (el.isContentEditable) {
+      el.textContent = value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const opts = await waitForOptions(2500);
+    const match =
+      opts.find((o) => norm(o.textContent) === norm(value)) ||
+      opts.find((o) => norm(o.textContent).startsWith(norm(value))) ||
+      opts.find((o) => norm(o.textContent).includes(norm(value)));
+    if (match) {
+      match.scrollIntoView({ block: 'nearest' });
+      match.click();
+      return true;
+    }
+    // No listbox match: for free-text autocompletes the typed value may be accepted.
+    pressKey(el, 'Enter');
+    pressKey(el, 'Escape'); // close any lingering list
+    return el.tagName === 'INPUT';
+  }
+
   let filled = 0;
 
   for (const m of mappings) {
@@ -79,26 +216,41 @@ function fillFields(mappings) {
 
     const tag = el.tagName.toLowerCase();
     const type = (el.getAttribute('type') || '').toLowerCase();
+    const role = el.getAttribute('role') || '';
+    const isWidget =
+      role === 'combobox' ||
+      role === 'listbox' ||
+      el.getAttribute('aria-haspopup') === 'listbox' ||
+      el.getAttribute('aria-autocomplete') != null;
+    const value = String(m.value);
 
-    if (tag === 'select') {
-      const opts = Array.from(el.options);
-      const want = String(m.value);
-      const match =
-        opts.find((o) => o.value === want) ||
-        opts.find((o) => (o.textContent || '').trim() === want) ||
-        opts.find((o) => (o.textContent || '').trim().toLowerCase() === want.toLowerCase());
-      if (!match) continue;
-      el.value = match.value;
-    } else if (type === 'checkbox' || type === 'radio') {
-      el.checked = /^(true|yes|on|1|checked)$/i.test(String(m.value).trim());
-    } else {
-      el.value = m.value;
+    try {
+      if (tag === 'select') {
+        const opts = Array.from(el.options);
+        const match =
+          opts.find((o) => o.value === value) ||
+          opts.find((o) => norm(o.textContent) === norm(value)) ||
+          opts.find((o) => norm(o.textContent).includes(norm(value)));
+        if (!match) continue;
+        el.value = match.value;
+        fireInput(el);
+      } else if (type === 'checkbox' || type === 'radio') {
+        const desired = /^(true|yes|on|1|checked|selected)$/i.test(value.trim());
+        if (el.checked !== desired) el.click(); // click flips + fires native events
+      } else if (isWidget) {
+        await fillWidget(el, value);
+      } else if (el.isContentEditable) {
+        el.textContent = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        setNativeValue(el, value);
+        fireInput(el);
+      }
+      el.style.outline = '2px solid #22c55e'; // green highlight so the user can eyeball
+      filled++;
+    } catch (e) {
+      // One stubborn field shouldn't abort the rest.
     }
-
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.style.outline = '2px solid #22c55e'; // green highlight so the user can eyeball
-    filled++;
   }
 
   return filled;

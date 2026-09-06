@@ -58,7 +58,14 @@ async function mapFields(apiKey, profile, fields) {
     'Rules:\n' +
     '- Only include a field if the profile clearly provides a matching value. Omit anything uncertain.\n' +
     '- For a "select" field, value MUST be exactly one of its listed options.\n' +
-    '- For a checkbox/radio field, value should be "true" or "false".\n' +
+    '- Fields that share the same non-empty "choiceGroup" are ONE question made of radio\n' +
+    '  buttons. Pick the single best option and set its value to "true"; do NOT include the\n' +
+    "  group's other options in your output.\n" +
+    '- For a standalone checkbox, value is "true" or "false".\n' +
+    '- A field\'s label may read "Question — Option" for grouped choices; match on the whole thing.\n' +
+    '- A field with "widget": true is a custom dropdown/autocomplete with no options listed.\n' +
+    '  Give the best full value from the profile (e.g. the full country/state/city name); the\n' +
+    '  extension opens the widget and clicks the closest match.\n' +
     '- Keep values concise plain text. Do not invent data that is not in the profile.';
 
   const body = {
