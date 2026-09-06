@@ -10,8 +10,11 @@
 function extractFields() {
   const SELECTOR =
     'input, textarea, select, [contenteditable="true"], ' +
-    '[role="textbox"], [role="combobox"], [aria-haspopup="listbox"]';
+    '[role="textbox"], [role="combobox"], [aria-haspopup="listbox"], ' +
+    '[role="radio"], [role="checkbox"], [role="switch"]';
   const SKIP = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
+
+  const NATIVE = 'input, textarea, select';
 
   function isWidget(el) {
     const role = el.getAttribute('role');
@@ -23,17 +26,34 @@ function extractFields() {
     );
   }
 
-  // The question a radio/checkbox belongs to (the group label), so the model sees
-  // "Willing to relocate?" instead of a bare "Yes".
+  // The question a radio/checkbox belongs to (the group label), so the model sees the full
+  // "Are you comfortable working on-site?" instead of a bare "Yes". Custom forms (Ashby,
+  // Workday, Thingtrax) rarely use <fieldset>, so we also climb for a preceding question.
   function groupQuestion(el) {
-    const fs = el.closest('fieldset');
-    const legend = fs && fs.querySelector('legend');
-    if (legend && legend.textContent.trim()) return legend.textContent;
-    const grp = el.closest('[role="radiogroup"], [role="group"]');
-    if (grp && grp.getAttribute('aria-label')) return grp.getAttribute('aria-label');
-    if (grp && grp.getAttribute('aria-labelledby')) {
-      const l = document.getElementById(grp.getAttribute('aria-labelledby'));
-      if (l) return l.textContent;
+    const grp = el.closest('fieldset, [role="radiogroup"], [role="group"]');
+    if (grp) {
+      const legend = grp.querySelector('legend');
+      if (legend && legend.textContent.trim()) return legend.textContent;
+      if (grp.getAttribute('aria-label')) return grp.getAttribute('aria-label');
+      if (grp.getAttribute('aria-labelledby')) {
+        const l = document.getElementById(grp.getAttribute('aria-labelledby'));
+        if (l && l.textContent.trim()) return l.textContent;
+      }
+      let p = grp.previousElementSibling;
+      while (p && !p.textContent.trim()) p = p.previousElementSibling;
+      if (p) return p.textContent;
+    }
+    // No explicit group container: the question is usually a heading/label/paragraph that
+    // precedes the option cluster. Walk up a few levels and take the first real text that
+    // isn't itself an option ("Yes"/"No").
+    let node = el;
+    for (let d = 0; d < 4 && node; d++, node = node.parentElement) {
+      let p = node.previousElementSibling;
+      while (p) {
+        const t = p.textContent.replace(/\s+/g, ' ').trim();
+        if (t && !/^(yes|no|true|false)$/i.test(t)) return t;
+        p = p.previousElementSibling;
+      }
     }
     return '';
   }
@@ -55,11 +75,20 @@ function extractFields() {
       if (l) label = l.textContent || '';
     }
     if (!label) label = el.getAttribute('placeholder') || '';
+    // For custom (non-native) widgets, the element's own text is often the option label,
+    // e.g. <div role="radio">Yes</div>.
+    if (!label && !el.matches(NATIVE)) label = el.textContent || '';
     if (!label) {
       const prev = el.previousElementSibling;
       if (prev) label = prev.textContent || '';
     }
     return label;
+  }
+
+  function isChoice(el) {
+    const t = (el.getAttribute('type') || '').toLowerCase();
+    const r = el.getAttribute('role');
+    return t === 'radio' || t === 'checkbox' || r === 'radio' || r === 'checkbox' || r === 'switch';
   }
 
   // If a modal/dialog is open (LinkedIn Easy Apply, most apply-in-place forms), scan ONLY
@@ -100,15 +129,16 @@ function extractFields() {
 
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role') || '';
-    const isChoice = type === 'radio' || type === 'checkbox';
+    const choice = isChoice(el);
 
     let label = resolveLabel(el);
-    if (isChoice) {
-      const q = groupQuestion(el).replace(/\s+/g, ' ').trim();
-      const own = label.replace(/\s+/g, ' ').trim() || el.value || '';
+    let q = '';
+    if (choice) {
+      q = groupQuestion(el).replace(/\s+/g, ' ').trim();
+      const own = (label || el.value || '').replace(/\s+/g, ' ').trim();
       label = q ? q + ' — ' + own : own;
     }
-    label = label.replace(/\s+/g, ' ').trim().slice(0, 200);
+    label = label.replace(/\s+/g, ' ').trim().slice(0, choice ? 300 : 200);
 
     const field = {
       af_id: afId,
@@ -120,12 +150,15 @@ function extractFields() {
       id: el.id || '',
       label,
       required: el.required || el.getAttribute('aria-required') === 'true',
-      currentValue: (el.value || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100),
+      // A custom choice widget's own text is the option, not a "current value".
+      currentValue: (el.value || (choice ? '' : el.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 100),
     };
 
-    if (isChoice) {
-      field.choiceGroup = el.getAttribute('name') || '';
-      field.optionValue = el.value;
+    if (choice) {
+      const grp = el.closest('[role="radiogroup"], fieldset, [role="group"]');
+      // Group key so the model treats one question's options as a single choice.
+      field.choiceGroup = el.getAttribute('name') || (grp && grp.id) || q || '';
+      field.optionValue = el.value || label.split(' — ').pop() || '';
     }
 
     if (tag === 'select') {
@@ -248,9 +281,16 @@ async function fillFields(mappings) {
         if (!match) continue;
         el.value = match.value;
         fireInput(el);
-      } else if (type === 'checkbox' || type === 'radio') {
+      } else if (
+        type === 'checkbox' || type === 'radio' ||
+        role === 'radio' || role === 'checkbox' || role === 'switch'
+      ) {
+        const native = type === 'checkbox' || type === 'radio';
         const desired = /^(true|yes|on|1|checked|selected)$/i.test(value.trim());
-        if (el.checked !== desired) el.click(); // click flips + fires native events
+        const current = native ? el.checked : el.getAttribute('aria-checked') === 'true';
+        // Click to change state (fires native events). For ARIA widgets only click to
+        // turn ON — the model omits the "off" options, so we never toggle them off.
+        if (current !== desired && (desired || native)) el.click();
       } else if (isWidget) {
         await fillWidget(el, value);
       } else if (el.isContentEditable) {

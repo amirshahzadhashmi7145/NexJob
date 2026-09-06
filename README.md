@@ -1,4 +1,6 @@
-# Smart Autofill
+<img src="icons/icon128.png" width="76" align="right" alt="NexJob logo" />
+
+# NexJob
 
 A load-it-yourself Chrome extension that reads any web form and fills it from your saved
 profile. An LLM handles the messy part — matching each field to the right piece of your
@@ -24,7 +26,7 @@ Plain code does the DOM scan and the actual typing.
 1. Clone or download this repo.
 2. Go to `chrome://extensions`, toggle **Developer mode** (top right).
 3. Click **Load unpacked** and select this folder.
-4. The **Smart Autofill** icon appears in your toolbar. (Keep the folder around — deleting
+4. The **NexJob** icon appears in your toolbar. (Keep the folder around — deleting
    it removes the extension.)
 
 ## Setup
@@ -38,7 +40,7 @@ Plain code does the DOM scan and the actual typing.
 ## Use
 
 1. Open any page with a form (job application, contact form, etc.).
-2. Click the **Smart Autofill** icon → **Fill this form**.
+2. Click the **NexJob** icon → **Fill this form**.
 3. Anything it couldn't fill appears in a **"needs your input"** panel — type the answers,
    click **Save & fill**, and they're filled *and remembered* (see below).
 4. Review the highlighted fields, fix anything the model guessed wrong, and **submit
