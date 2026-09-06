@@ -78,6 +78,16 @@
           is saved automatically under <code>learned</code>.
         </p>
 
+        <label for="executor" style="display: flex; align-items: center; gap: 8px; margin-top: 18px; cursor: pointer;">
+          <input type="checkbox" id="executor" style="width: auto; margin: 0;" />
+          Enable AI action planner for tricky fields <em style="font-weight: 400; color: #6b7280;">(experimental)</em>
+        </label>
+        <p class="hint" style="margin-top: 4px;">
+          When a field can't be filled the normal way, this sends <strong>that one field's HTML</strong>
+          to OpenAI and runs safe click/type actions to fill it. <strong>Off by default.</strong>
+          Costs an extra API call per tricky field.
+        </p>
+
         <div class="row">
           <button id="save">Save</button>
           <button id="loadExample">Load example</button>

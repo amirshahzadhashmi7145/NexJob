@@ -118,12 +118,20 @@ click the icon → *Fill this form*.
 
 ---
 
+## Handling fields it has no built-in handler for
+
+When the model provides a value but NexJob's built-in primitives can't apply it (an unusual
+custom widget), it falls back to an **LLM action planner**: it sends that one field's HTML +
+the desired value to the model, which returns an ordered list of **safe actions** from a
+fixed set — `click`, `setValue`, `selectOption` — and a small executor runs *only* those.
+The model never returns or runs code (Chrome MV3 forbids that, and it would be unsafe); it
+only composes whitelisted actions. This is the "agent + safe tools" pattern.
+
 ## Roadmap
 
-- **v1 (now):** one structured LLM call returns a field→value map. Simple, works.
-- **v2 (planned):** refactor into an OpenAI **tool-calling agent loop** —
-  `get_profile_section`, `read_field`, `fill_field`, `ask_user`. The model drives, asks
-  when unsure. This is the "agentic AI" version and the main learning goal.
+- **v1 (now):** structured field→value map + safe action-planner fallback for tricky widgets.
+- **next:** a full observe→act→retry loop (feed action failures back to the planner), and
+  choice questions rendered in the ask panel (done) with learned answers reused over time.
 
 ---
 

@@ -3,6 +3,7 @@
 
 const apiKeyEl = document.getElementById('apiKey');
 const profileEl = document.getElementById('profile');
+const executorEl = document.getElementById('executor');
 const statusEl = document.getElementById('status');
 
 function flash(msg, ok = true) {
@@ -12,9 +13,12 @@ function flash(msg, ok = true) {
 }
 
 async function load() {
-  const { apiKey = '', profile = '' } = await chrome.storage.local.get(['apiKey', 'profile']);
+  const { apiKey = '', profile = '', executorEnabled = false } = await chrome.storage.local.get([
+    'apiKey', 'profile', 'executorEnabled',
+  ]);
   apiKeyEl.value = apiKey;
   profileEl.value = profile;
+  executorEl.checked = executorEnabled; // default off
 }
 
 document.getElementById('save').addEventListener('click', async () => {
@@ -27,7 +31,11 @@ document.getElementById('save').addEventListener('click', async () => {
       return;
     }
   }
-  await chrome.storage.local.set({ apiKey: apiKeyEl.value.trim(), profile });
+  await chrome.storage.local.set({
+    apiKey: apiKeyEl.value.trim(),
+    profile,
+    executorEnabled: executorEl.checked,
+  });
   flash('Saved ✓');
 });
 

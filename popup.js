@@ -34,7 +34,9 @@ $('saveMissing').addEventListener('click', saveMissing);
 
 async function runFill() {
   missingEl.classList.remove('show');
-  const { profile, apiKey } = await chrome.storage.local.get(['profile', 'apiKey']);
+  const { profile, apiKey, executorEnabled } = await chrome.storage.local.get([
+    'profile', 'apiKey', 'executorEnabled',
+  ]);
   if (!apiKey) return setStatus('Add your OpenAI key in settings.', 'err');
   if (!profile) return setStatus('Add your profile in settings.', 'err');
 
@@ -61,16 +63,27 @@ async function runFill() {
     setStatus('Found ' + fields.length + ' fields. Asking AI…', 'busy');
     const mappings = await mapFields(apiKey, profileObj, fields);
 
+    let filledIds = [];
     if (mappings.length) {
       setStatus('Filling ' + mappings.length + ' fields…', 'busy');
-      await chrome.scripting.executeScript({
+      const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: fillFields,
         args: [mappings],
       });
+      filledIds = result || [];
     }
 
-    const mapped = new Set(mappings.map((m) => String(m.af_id)));
+    // Fields the model wanted to fill but our primitives couldn't apply → let the LLM plan
+    // safe actions for each tricky widget and run them (the "AI figures out the field" path).
+    const mapped = new Set(filledIds.map(String));
+    const failed = mappings.filter((m) => !mapped.has(String(m.af_id)));
+    if (failed.length && executorEnabled) {
+      setStatus('Working out ' + failed.length + ' tricky field(s)…', 'busy');
+      const handled = await tryPlanFill(apiKey, tab.id, fields, failed);
+      handled.forEach((id) => mapped.add(id));
+    }
+
     const texts = fields.filter(
       (f) => isAskableText(f) && !mapped.has(String(f.af_id)) && !f.currentValue,
     );
@@ -78,10 +91,10 @@ async function runFill() {
 
     if (texts.length || groups.length) {
       const n = texts.length + groups.length;
-      setStatus('Filled ' + mappings.length + '. ' + n + ' need your input:', 'ok');
+      setStatus('Filled ' + mapped.size + '. ' + n + ' need your input:', 'ok');
       showMissing(texts, groups);
     } else {
-      setStatus('Filled ' + mappings.length + ' fields. Review, then submit.', 'ok');
+      setStatus('Filled ' + mapped.size + ' fields. Review, then submit.', 'ok');
     }
   } catch (err) {
     setStatus('Error: ' + (err?.message || String(err)), 'err');
@@ -222,6 +235,101 @@ async function remember(entries) {
   p.learned = p.learned || {};
   for (const e of entries) if (e.label) p.learned[e.label] = e.value;
   await chrome.storage.local.set({ profile: JSON.stringify(p, null, 2) });
+}
+
+// For each field the primitives couldn't fill, ask the LLM for a safe action plan and run
+// it. Capped so a bad form can't fan out into dozens of API calls.
+async function tryPlanFill(apiKey, tabId, fields, failed) {
+  const handled = new Set();
+  const byId = new Map(fields.map((f) => [String(f.af_id), f]));
+  for (const m of failed.slice(0, 8)) {
+    const f = byId.get(String(m.af_id));
+    if (!f) continue;
+    try {
+      const [{ result: html }] = await chrome.scripting.executeScript({
+        target: { tabId }, func: getFieldHTML, args: [m.af_id],
+      });
+      if (!html) continue;
+      const actions = await planActions(apiKey, f, String(m.value), html);
+      if (!actions.length) continue;
+      const [{ result: done }] = await chrome.scripting.executeScript({
+        target: { tabId }, func: runActions, args: [actions],
+      });
+      if (done > 0) handled.add(String(m.af_id));
+    } catch (e) {
+      // ignore this field, keep going
+    }
+  }
+  return handled;
+}
+
+// LLM planner: given ONE field's HTML + desired value, return an ordered list of SAFE
+// actions (click / setValue / selectOption). The LLM never returns code — only these
+// primitives, which runActions() (inject.js) executes.
+async function planActions(apiKey, field, value, html) {
+  const system =
+    'You control ONE web form field using a fixed, safe set of actions. You are given the\n' +
+    "field's HTML and the value to enter. Return an ordered list of actions that set it.\n" +
+    'Actions (each has "action" plus some of selector/text/value; set unused ones to null):\n' +
+    '- {"action":"setValue","selector":"<css>","value":"<text>"} — type into a text input/textarea.\n' +
+    '- {"action":"selectOption","selector":"<css for the <select>>","text":"<option text>"} — native select.\n' +
+    '- {"action":"click","selector":"<css>"} or {"action":"click","text":"<visible text>"} — click a\n' +
+    '  trigger or an option. For a custom dropdown: click the trigger, then click the option by text.\n' +
+    'Rules:\n' +
+    '- Use CSS selectors that actually appear in the given HTML (id, class, name, data-*, role).\n' +
+    '- NEVER click submit / next / continue / save / apply / upload / delete controls.\n' +
+    '- Use the fewest steps. If nothing sensible fits, return an empty list.';
+
+  const body = {
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: JSON.stringify({ label: field.label, value, html }) },
+    ],
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'action_plan',
+        strict: true,
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['actions'],
+          properties: {
+            actions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['action', 'selector', 'text', 'value'],
+                properties: {
+                  action: { type: 'string', enum: ['click', 'setValue', 'selectOption'] },
+                  selector: { type: ['string', 'null'] },
+                  text: { type: ['string', 'null'] },
+                  value: { type: ['string', 'null'] },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content || '{}';
+  try {
+    const parsed = JSON.parse(content);
+    return Array.isArray(parsed.actions) ? parsed.actions : [];
+  } catch {
+    return [];
+  }
 }
 
 // Ask the LLM which value goes in each field. Structured output guarantees valid JSON.

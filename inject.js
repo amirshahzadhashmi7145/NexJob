@@ -104,6 +104,31 @@ function extractFields() {
     return false;
   }
 
+  // The SHORT label for one choice option ("Yes"), distinct from the group's question.
+  // Many forms give the radio's accessible name as the whole question, so we gather several
+  // candidates and take the shortest one that isn't the question.
+  function optionLabel(el, q) {
+    const nq = (q || '').replace(/\s+/g, ' ').trim();
+    const cands = [];
+    if (!el.matches(NATIVE)) cands.push(el.textContent);
+    if (el.labels && el.labels[0]) cands.push(el.labels[0].textContent);
+    const wrap = el.closest('label');
+    if (wrap) cands.push(wrap.textContent);
+    cands.push(el.getAttribute('aria-label'));
+    if (el.nextElementSibling) cands.push(el.nextElementSibling.textContent);
+    if (el.previousElementSibling) cands.push(el.previousElementSibling.textContent);
+    cands.push(el.value);
+    let best = '';
+    for (let c of cands) {
+      if (!c) continue;
+      c = c.replace(/\s+/g, ' ').trim();
+      if (nq && c.includes(nq)) c = c.replace(nq, '').replace(/^[\s\-—–:*|]+/, '').trim();
+      if (!c || c === nq) continue;
+      if (!best || c.length < best.length) best = c; // shortest wins ("Yes" over the question)
+    }
+    return best || (el.value || '').trim();
+  }
+
   // If a modal/dialog is open (LinkedIn Easy Apply, most apply-in-place forms), scan ONLY
   // inside it — otherwise we'd also grab the search bar / filters on the page behind it.
   function pickRoot() {
@@ -149,7 +174,7 @@ function extractFields() {
     let own = '';
     if (choice) {
       q = groupQuestion(el).replace(/\s+/g, ' ').trim();
-      own = (label || el.value || '').replace(/\s+/g, ' ').trim();
+      own = optionLabel(el, q); // "Yes"/"No", not the whole question
       label = q ? q + ' — ' + own : own;
     }
     label = label.replace(/\s+/g, ' ').trim().slice(0, choice ? 300 : 200);
@@ -288,7 +313,7 @@ async function fillFields(mappings) {
     return el.tagName === 'INPUT';
   }
 
-  let filled = 0;
+  const filledIds = [];
 
   for (const m of mappings) {
     const el = document.querySelector('[data-af-id="' + CSS.escape(String(m.af_id)) + '"]');
@@ -303,6 +328,7 @@ async function fillFields(mappings) {
       el.getAttribute('aria-haspopup') === 'listbox' ||
       el.getAttribute('aria-autocomplete') != null;
     const value = String(m.value);
+    let ok = false;
 
     try {
       if (tag === 'select') {
@@ -315,9 +341,7 @@ async function fillFields(mappings) {
         if (!match) {
           match = opts.find((o) => OTHER_RE.test(norm(o.textContent)) || OTHER_RE.test(norm(o.value)));
         }
-        if (!match) continue;
-        el.value = match.value;
-        fireInput(el);
+        if (match) { el.value = match.value; fireInput(el); ok = true; }
       } else if (
         type === 'checkbox' || type === 'radio' ||
         role === 'radio' || role === 'checkbox' || role === 'switch' ||
@@ -332,21 +356,100 @@ async function fillFields(mappings) {
         // Click to change state (fires native events). Only ever click to turn ON — the
         // model / user picks one option, and we never toggle another off.
         if (current !== desired && (desired || native)) el.click();
+        ok = true;
       } else if (isWidget) {
-        await fillWidget(el, value);
+        ok = await fillWidget(el, value);
       } else if (el.isContentEditable) {
         el.textContent = value;
         el.dispatchEvent(new Event('input', { bubbles: true }));
+        ok = true;
       } else {
         setNativeValue(el, value);
         fireInput(el);
+        ok = true;
       }
-      el.style.outline = '2px solid #22c55e'; // green highlight so the user can eyeball
-      filled++;
+      if (ok) {
+        el.style.outline = '2px solid #22c55e'; // green highlight so the user can eyeball
+        filledIds.push(String(m.af_id));
+      }
     } catch (e) {
       // One stubborn field shouldn't abort the rest.
     }
   }
 
-  return filled;
+  return filledIds;
+}
+
+// Return the outerHTML of a field's surrounding container, so the LLM planner can see the
+// widget's structure. Capped so we never ship a huge blob.
+function getFieldHTML(afId) {
+  const el = document.querySelector('[data-af-id="' + CSS.escape(String(afId)) + '"]');
+  if (!el) return '';
+  let c = el;
+  // Climb a few levels for context, but stop before we swallow the whole form.
+  for (let i = 0; i < 3; i++) {
+    const p = c.parentElement;
+    if (!p || p.querySelectorAll('input, textarea, select, [role]').length > 14) break;
+    c = p;
+  }
+  return c.outerHTML.slice(0, 4000);
+}
+
+// SAFE EXECUTOR: run a small, fixed set of actions the LLM planned for a tricky field.
+// It executes ONLY these whitelisted primitives — it never evals code. Each action refers
+// to elements by CSS selector or visible text. Returns how many steps applied.
+async function runActions(actions) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const vis = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const q = (sel) => {
+    try {
+      return Array.from(document.querySelectorAll(sel)).filter(vis);
+    } catch {
+      return [];
+    }
+  };
+  const norm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase();
+  const byText = (text) => {
+    const t = norm(text);
+    const cands = document.querySelectorAll(
+      'button, [role="option"], [role="radio"], [role="button"], label, li, a, span, div',
+    );
+    return Array.from(cands).filter(vis).find((e) => norm(e.textContent) === t);
+  };
+  const setVal = (el, v) => {
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const d = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (d && d.set) d.set.call(el, v);
+    else el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+
+  let done = 0;
+  for (const a of actions || []) {
+    try {
+      if (a.action === 'click') {
+        const el = (a.selector && q(a.selector)[0]) || (a.text && byText(a.text));
+        if (el) { el.scrollIntoView({ block: 'nearest' }); el.click(); done++; }
+      } else if (a.action === 'setValue') {
+        const el = a.selector && q(a.selector)[0];
+        if (el) { el.focus(); setVal(el, a.value != null ? a.value : a.text); done++; }
+      } else if (a.action === 'selectOption') {
+        const el = a.selector && q(a.selector)[0];
+        if (el && el.tagName === 'SELECT') {
+          const o = Array.from(el.options).find(
+            (o) => norm(o.textContent) === norm(a.text) || o.value === a.value,
+          );
+          if (o) { el.value = o.value; el.dispatchEvent(new Event('change', { bubbles: true })); done++; }
+        }
+      }
+      await sleep(160); // let async widgets react between steps
+    } catch (e) {
+      // skip a bad step, keep going
+    }
+  }
+  return done;
 }
