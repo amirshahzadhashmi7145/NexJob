@@ -39,8 +39,21 @@ Plain code does the DOM scan and the actual typing.
 
 1. Open any page with a form (job application, contact form, etc.).
 2. Click the **Smart Autofill** icon → **Fill this form**.
-3. Review the highlighted fields, fix anything the model guessed wrong, and **submit
+3. Anything it couldn't fill appears in a **"needs your input"** panel — type the answers,
+   click **Save & fill**, and they're filled *and remembered* (see below).
+4. Review the highlighted fields, fix anything the model guessed wrong, and **submit
    yourself**. The extension never submits for you.
+
+## Learns as you go
+
+When a field can't be filled from your profile, the extension asks you for it once. Your
+answer is **saved back into your profile** (under a `learned` key), so the next form with
+that question fills automatically. Over time it needs to ask less and less.
+
+> This is **memory, not model training** — nothing is fine-tuned. Your answers are simply
+> stored in `chrome.storage.local` and reused. Screening/essay answers are only ever
+> filled from *your own* saved text, never AI-composed — so tools that ban AI writing stay
+> honest.
 
 ---
 

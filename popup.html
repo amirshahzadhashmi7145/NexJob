@@ -3,21 +3,78 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { width: 260px; font: 14px system-ui, sans-serif; margin: 0; padding: 14px; }
-      h1 { font-size: 15px; margin: 0 0 10px; }
-      button { width: 100%; padding: 10px; font-size: 14px; cursor: pointer;
-               border: 0; border-radius: 6px; background: #2563eb; color: #fff; }
-      button:hover { background: #1d4ed8; }
-      #status { min-height: 18px; margin: 10px 0 6px; color: #374151; font-size: 13px; }
-      a { font-size: 12px; color: #2563eb; text-decoration: none; }
-      a:hover { text-decoration: underline; }
+      * { box-sizing: border-box; }
+      body {
+        width: 340px; margin: 0; color: #111827; background: #fff;
+        font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      header {
+        background: linear-gradient(135deg, #6366f1, #2563eb);
+        color: #fff; padding: 14px 16px; display: flex; align-items: center; gap: 10px;
+      }
+      header .logo { font-size: 20px; }
+      header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+      header p { margin: 2px 0 0; font-size: 11px; opacity: 0.85; }
+      main { padding: 16px; }
+      .btn {
+        width: 100%; padding: 11px; border: 0; border-radius: 10px; cursor: pointer;
+        font: 600 14px system-ui; background: #2563eb; color: #fff; transition: background 0.15s;
+      }
+      .btn:hover { background: #1d4ed8; }
+      .btn:disabled { opacity: 0.6; cursor: default; }
+      .btn.secondary { background: #eef2ff; color: #3730a3; }
+      .row { display: flex; gap: 8px; margin-top: 10px; }
+      #status {
+        margin-top: 12px; font-size: 13px; color: #374151; min-height: 18px;
+        display: flex; align-items: center; gap: 7px;
+      }
+      #status.ok { color: #166534; }
+      #status.err { color: #b91c1c; }
+      #status.busy { color: #1d4ed8; }
+      .spinner {
+        width: 13px; height: 13px; border: 2px solid #bfdbfe; border-top-color: #2563eb;
+        border-radius: 50%; animation: spin 0.7s linear infinite; flex: none;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      #missing { margin-top: 14px; display: none; }
+      #missing h2 { font-size: 12px; margin: 0 0 10px; color: #374151; font-weight: 600; }
+      .field { margin-bottom: 11px; }
+      .field label { display: block; font-size: 12px; color: #4b5563; margin-bottom: 4px; }
+      .field input, .field textarea {
+        width: 100%; padding: 7px 9px; border: 1px solid #d1d5db; border-radius: 8px;
+        font: 13px system-ui; resize: vertical;
+      }
+      .field input:focus, .field textarea:focus { outline: 2px solid #bfdbfe; border-color: #2563eb; }
+      footer { padding: 0 16px 14px; text-align: center; }
+      footer a { font-size: 12px; color: #2563eb; text-decoration: none; }
+      footer a:hover { text-decoration: underline; }
     </style>
   </head>
   <body>
-    <h1>Smart Autofill</h1>
-    <button id="fill">Fill this form</button>
-    <p id="status"></p>
-    <a href="#" id="opts">Edit profile / API key</a>
+    <header>
+      <span class="logo">⚡</span>
+      <div>
+        <h1>Smart Autofill</h1>
+        <p>Fill any form from your profile</p>
+      </div>
+    </header>
+
+    <main>
+      <button id="fill" class="btn">Fill this form</button>
+      <div id="status"></div>
+
+      <div id="missing">
+        <h2>A few fields I couldn't fill — answer once and I'll remember them:</h2>
+        <div id="missingList"></div>
+        <div class="row">
+          <button id="saveMissing" class="btn">Save &amp; fill</button>
+          <button id="skipMissing" class="btn secondary">Skip</button>
+        </div>
+      </div>
+    </main>
+
+    <footer><a href="#" id="opts">⚙ Edit profile / API key</a></footer>
+
     <script src="inject.js"></script>
     <script src="popup.js"></script>
   </body>
