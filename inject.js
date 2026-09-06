@@ -11,10 +11,16 @@ function extractFields() {
   const SELECTOR =
     'input, textarea, select, [contenteditable="true"], ' +
     '[role="textbox"], [role="combobox"], [aria-haspopup="listbox"], ' +
-    '[role="radio"], [role="checkbox"], [role="switch"]';
+    '[role="radio"], [role="checkbox"], [role="switch"], [aria-pressed], ' +
+    // choice buttons live only inside a question group (avoids grabbing Submit/Next):
+    '[role="radiogroup"] button, [role="group"] button, fieldset button, ' +
+    '[role="radiogroup"] [role="button"], [role="group"] [role="button"], fieldset [role="button"]';
   const SKIP = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
 
   const NATIVE = 'input, textarea, select';
+  // Words that mean "this button does an action" (never a choice option).
+  const ACTION_RE =
+    /^(submit|next|back|prev|previous|continue|save|cancel|apply|upload|add|remove|delete|edit|search|clear|close|skip|browse|choose file|log ?in|sign ?in|sign ?up)/i;
 
   function isWidget(el) {
     const role = el.getAttribute('role');
@@ -88,7 +94,14 @@ function extractFields() {
   function isChoice(el) {
     const t = (el.getAttribute('type') || '').toLowerCase();
     const r = el.getAttribute('role');
-    return t === 'radio' || t === 'checkbox' || r === 'radio' || r === 'checkbox' || r === 'switch';
+    if (t === 'radio' || t === 'checkbox' || r === 'radio' || r === 'checkbox' || r === 'switch') return true;
+    if (el.hasAttribute('aria-pressed')) return true;
+    // A button / role=button inside a question group, that isn't an action button.
+    if ((el.tagName === 'BUTTON' || r === 'button') && el.closest('[role="radiogroup"], [role="group"], fieldset')) {
+      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      return txt.length > 0 && txt.length <= 40 && !ACTION_RE.test(txt);
+    }
+    return false;
   }
 
   // If a modal/dialog is open (LinkedIn Easy Apply, most apply-in-place forms), scan ONLY
@@ -118,7 +131,8 @@ function extractFields() {
     seen.add(el);
 
     const type = (el.getAttribute('type') || el.tagName).toLowerCase();
-    if (SKIP.has(type)) continue;
+    const choice = isChoice(el);
+    if (SKIP.has(type) && !choice) continue; // keep choice-buttons; drop Submit/Next/etc.
     if (el.disabled || el.readOnly) continue;
 
     const rect = el.getBoundingClientRect();
@@ -129,13 +143,13 @@ function extractFields() {
 
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role') || '';
-    const choice = isChoice(el);
 
     let label = resolveLabel(el);
     let q = '';
+    let own = '';
     if (choice) {
       q = groupQuestion(el).replace(/\s+/g, ' ').trim();
-      const own = (label || el.value || '').replace(/\s+/g, ' ').trim();
+      own = (label || el.value || '').replace(/\s+/g, ' ').trim();
       label = q ? q + ' — ' + own : own;
     }
     label = label.replace(/\s+/g, ' ').trim().slice(0, choice ? 300 : 200);
@@ -156,9 +170,11 @@ function extractFields() {
 
     if (choice) {
       const grp = el.closest('[role="radiogroup"], fieldset, [role="group"]');
-      // Group key so the model treats one question's options as a single choice.
+      // Group key so the model (and the popup) treat one question's options as one choice.
       field.choiceGroup = el.getAttribute('name') || (grp && grp.id) || q || '';
-      field.optionValue = el.value || label.split(' — ').pop() || '';
+      field.optionValue = el.value || own || '';
+      field.question = q; // the group's question (may be '')
+      field.option = own; // this option's own label ("Yes", "No", ...)
     }
 
     if (tag === 'select') {
@@ -189,6 +205,8 @@ async function fillFields(mappings) {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
+  // Fallback option to pick when the profile's value isn't among the choices.
+  const OTHER_RE = /(^|\W)other(\W|$)|not listed|none of the above|prefer not|please specify/i;
 
   // React/Vue override the value setter; set through the prototype so the change "sticks".
   function setNativeValue(el, value) {
@@ -237,18 +255,33 @@ async function fillFields(mappings) {
       el.textContent = value;
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }
-    const opts = await waitForOptions(2500);
-    const match =
-      opts.find((o) => norm(o.textContent) === norm(value)) ||
-      opts.find((o) => norm(o.textContent).startsWith(norm(value))) ||
-      opts.find((o) => norm(o.textContent).includes(norm(value)));
+    const pick = (list) =>
+      list.find((o) => norm(o.textContent) === norm(value)) ||
+      list.find((o) => norm(o.textContent).startsWith(norm(value))) ||
+      list.find((o) => norm(o.textContent).includes(norm(value)));
+
+    let opts = await waitForOptions(2500);
+    let match = pick(opts);
+
+    // The typed text may have filtered the list to nothing. If there WERE options (so this
+    // is a real dropdown, not a free-text box), clear the filter so all options — including
+    // an "Other" — come back, then re-pick.
+    if (!match && opts.length && el.tagName === 'INPUT') {
+      setNativeValue(el, '');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      opts = await waitForOptions(1200);
+      match = pick(opts);
+    }
+    // Value not in the list but an "Other"/"Not listed" option exists → pick that.
+    if (!match) match = opts.find((o) => OTHER_RE.test(norm(o.textContent)));
+
     if (match) {
       match.scrollIntoView({ block: 'nearest' });
       match.click();
       return true;
     }
-    // No match: keep the typed value (free-text autocompletes accept it) and close any
-    // open list GENTLY by blurring. Never press Escape/Enter — those bubble to the page
+    // No match at all: keep the typed value (free-text autocompletes accept it) and close
+    // any open list GENTLY by blurring. Never press Escape/Enter — those bubble to the page
     // and can close the whole modal (e.g. LinkedIn Easy Apply's "Save application?") or
     // submit the form.
     el.blur();
@@ -274,22 +307,30 @@ async function fillFields(mappings) {
     try {
       if (tag === 'select') {
         const opts = Array.from(el.options);
-        const match =
+        let match =
           opts.find((o) => o.value === value) ||
           opts.find((o) => norm(o.textContent) === norm(value)) ||
           opts.find((o) => norm(o.textContent).includes(norm(value)));
+        // Value not listed but an "Other"/"Not listed" option exists → pick that.
+        if (!match) {
+          match = opts.find((o) => OTHER_RE.test(norm(o.textContent)) || OTHER_RE.test(norm(o.value)));
+        }
         if (!match) continue;
         el.value = match.value;
         fireInput(el);
       } else if (
         type === 'checkbox' || type === 'radio' ||
-        role === 'radio' || role === 'checkbox' || role === 'switch'
+        role === 'radio' || role === 'checkbox' || role === 'switch' ||
+        el.hasAttribute('aria-pressed') || tag === 'button' || role === 'button'
       ) {
         const native = type === 'checkbox' || type === 'radio';
         const desired = /^(true|yes|on|1|checked|selected)$/i.test(value.trim());
-        const current = native ? el.checked : el.getAttribute('aria-checked') === 'true';
-        // Click to change state (fires native events). For ARIA widgets only click to
-        // turn ON — the model omits the "off" options, so we never toggle them off.
+        let current = false;
+        if (native) current = el.checked;
+        else if (el.hasAttribute('aria-checked')) current = el.getAttribute('aria-checked') === 'true';
+        else if (el.hasAttribute('aria-pressed')) current = el.getAttribute('aria-pressed') === 'true';
+        // Click to change state (fires native events). Only ever click to turn ON — the
+        // model / user picks one option, and we never toggle another off.
         if (current !== desired && (desired || native)) el.click();
       } else if (isWidget) {
         await fillWidget(el, value);

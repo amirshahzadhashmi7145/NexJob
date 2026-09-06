@@ -1,8 +1,8 @@
 // popup.js
-// Orchestrates one fill: scan the active tab -> ask the LLM -> write values back ->
-// ask the user for anything left unfilled -> remember those answers in the profile so
-// next time they fill automatically. The OpenAI key never touches the web page: the
-// fetch runs here, in the extension popup. extractFields / fillFields come from inject.js.
+// Orchestrates one fill: scan the active tab -> ask the LLM -> write values back -> ask the
+// user for anything left unfilled (text fields AND choice questions) -> remember those
+// answers in the profile so next time they fill automatically. The OpenAI key never touches
+// the web page: the fetch runs here, in the popup. extractFields / fillFields from inject.js.
 
 const $ = (id) => document.getElementById(id);
 const fillBtn = $('fill');
@@ -29,11 +29,11 @@ $('opts').addEventListener('click', (e) => {
 });
 
 fillBtn.addEventListener('click', runFill);
-$('skipMissing').addEventListener('click', () => (missingEl.style.display = 'none'));
+$('skipMissing').addEventListener('click', () => missingEl.classList.remove('show'));
 $('saveMissing').addEventListener('click', saveMissing);
 
 async function runFill() {
-  missingEl.style.display = 'none';
+  missingEl.classList.remove('show');
   const { profile, apiKey } = await chrome.storage.local.get(['profile', 'apiKey']);
   if (!apiKey) return setStatus('Add your OpenAI key in settings.', 'err');
   if (!profile) return setStatus('Add your profile in settings.', 'err');
@@ -71,13 +71,15 @@ async function runFill() {
     }
 
     const mapped = new Set(mappings.map((m) => String(m.af_id)));
-    const missing = fields.filter(
-      (f) => isAskable(f) && !mapped.has(String(f.af_id)) && !f.currentValue,
+    const texts = fields.filter(
+      (f) => isAskableText(f) && !mapped.has(String(f.af_id)) && !f.currentValue,
     );
+    const groups = groupChoices(fields, mapped);
 
-    if (missing.length) {
-      setStatus('Filled ' + mappings.length + '. ' + missing.length + ' need your input:', 'ok');
-      showMissing(missing);
+    if (texts.length || groups.length) {
+      const n = texts.length + groups.length;
+      setStatus('Filled ' + mappings.length + '. ' + n + ' need your input:', 'ok');
+      showMissing(texts, groups);
     } else {
       setStatus('Filled ' + mappings.length + ' fields. Review, then submit.', 'ok');
     }
@@ -88,10 +90,10 @@ async function runFill() {
   }
 }
 
-// Which unfilled fields are worth asking the user about (text-ish only; choices/files skipped).
-function isAskable(f) {
+// Plain text-ish fields (not choices) worth asking about.
+function isAskableText(f) {
   if (!f.label) return false;
-  if (['radio', 'checkbox', 'file', 'hidden', 'submit', 'button'].includes(f.type)) return false;
+  if (f.question !== undefined) return false; // it's a choice option — handled as a group
   return (
     f.tag === 'textarea' ||
     f.tag === 'select' ||
@@ -100,11 +102,33 @@ function isAskable(f) {
   );
 }
 
-function showMissing(missing) {
+// Group choice options (radio/checkbox/switch/choice-buttons) into one question each, and
+// keep only the questions the model did NOT answer.
+function groupChoices(fields, mapped) {
+  const byGroup = new Map();
+  for (const f of fields) {
+    if (f.question === undefined) continue; // only choice options carry this
+    const key = f.choiceGroup || f.question || 'grp-' + f.af_id;
+    if (!byGroup.has(key)) byGroup.set(key, { question: f.question || 'Choose an option', options: [] });
+    byGroup.get(key).options.push({ af_id: f.af_id, option: f.option || f.label });
+  }
+  const out = [];
+  for (const g of byGroup.values()) {
+    if (!g.options.length) continue;
+    if (g.options.some((o) => mapped.has(String(o.af_id)))) continue; // model already answered
+    out.push(g);
+  }
+  return out;
+}
+
+function showMissing(texts, groups) {
   listEl.textContent = '';
-  for (const f of missing) {
+  let idx = 0;
+
+  for (const f of texts) {
     const wrap = document.createElement('div');
     wrap.className = 'field';
+    wrap.style.animationDelay = idx++ * 0.04 + 's';
     const lab = document.createElement('label');
     lab.textContent = f.label;
     const long = f.tag === 'textarea' || f.label.length > 60;
@@ -116,17 +140,58 @@ function showMissing(missing) {
     wrap.appendChild(inp);
     listEl.appendChild(wrap);
   }
-  missingEl.style.display = 'block';
+
+  for (const g of groups) {
+    const wrap = document.createElement('div');
+    wrap.className = 'field group';
+    wrap.style.animationDelay = idx++ * 0.04 + 's';
+    const lab = document.createElement('label');
+    lab.textContent = g.question;
+    wrap.appendChild(lab);
+    const opts = document.createElement('div');
+    opts.className = 'opts';
+    for (const o of g.options) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'opt';
+      b.textContent = o.option;
+      b.dataset.afId = o.af_id;
+      b.addEventListener('click', () => {
+        opts.querySelectorAll('.opt').forEach((x) => x.classList.remove('sel'));
+        b.classList.add('sel');
+      });
+      opts.appendChild(b);
+    }
+    wrap.appendChild(opts);
+    listEl.appendChild(wrap);
+  }
+
+  missingEl.classList.add('show');
 }
 
 async function saveMissing() {
-  const inputs = Array.from(listEl.querySelectorAll('[data-af-id]'));
-  const entries = inputs
-    .map((i) => ({ af_id: i.dataset.afId, label: i.dataset.label, value: i.value.trim() }))
-    .filter((e) => e.value);
+  const fillEntries = [];
+  const learnEntries = [];
 
-  if (!entries.length) {
-    missingEl.style.display = 'none';
+  // Text answers.
+  listEl.querySelectorAll('input[data-af-id], textarea[data-af-id]').forEach((i) => {
+    const v = i.value.trim();
+    if (!v) return;
+    fillEntries.push({ af_id: i.dataset.afId, value: v });
+    learnEntries.push({ label: i.dataset.label, value: v });
+  });
+
+  // Choice selections.
+  listEl.querySelectorAll('.field.group').forEach((g) => {
+    const sel = g.querySelector('.opt.sel');
+    if (!sel) return;
+    fillEntries.push({ af_id: sel.dataset.afId, value: 'true' });
+    const q = g.querySelector('label')?.textContent || '';
+    learnEntries.push({ label: q, value: sel.textContent });
+  });
+
+  if (!fillEntries.length) {
+    missingEl.classList.remove('show');
     return;
   }
 
@@ -134,11 +199,11 @@ async function saveMissing() {
     await chrome.scripting.executeScript({
       target: { tabId: curTabId },
       func: fillFields,
-      args: [entries.map((e) => ({ af_id: e.af_id, value: e.value }))],
+      args: [fillEntries],
     });
-    await remember(entries);
-    setStatus('Filled ' + entries.length + ' more and remembered them for next time.', 'ok');
-    missingEl.style.display = 'none';
+    await remember(learnEntries);
+    setStatus('Filled ' + fillEntries.length + ' more and remembered them for next time.', 'ok');
+    missingEl.classList.remove('show');
   } catch (err) {
     setStatus('Error: ' + (err?.message || String(err)), 'err');
   }
@@ -155,7 +220,7 @@ async function remember(entries) {
     p = {};
   }
   p.learned = p.learned || {};
-  for (const e of entries) p.learned[e.label] = e.value;
+  for (const e of entries) if (e.label) p.learned[e.label] = e.value;
   await chrome.storage.local.set({ profile: JSON.stringify(p, null, 2) });
 }
 
@@ -166,7 +231,8 @@ async function mapFields(apiKey, profile, fields) {
     'form fields, decide which value to put in each field.\n' +
     'Rules:\n' +
     '- Only include a field if the profile clearly provides a matching value. Omit anything uncertain.\n' +
-    '- For a "select" field, value MUST be exactly one of its listed options.\n' +
+    '- For a "select" field, value MUST be exactly one of its listed options. If none of the\n' +
+    '  options matches the profile value but there is an "Other"/"Not listed" option, use that.\n' +
     '- Fields that share the same non-empty "choiceGroup" are ONE question made of radio\n' +
     '  buttons. Pick the single best option and set its value to "true"; do NOT include the\n' +
     "  group's other options in your output.\n" +
