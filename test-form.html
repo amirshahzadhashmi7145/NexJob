@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Smart Autofill — test form &amp; self-check</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; max-width: 520px; margin: 30px auto; }
+      label { display: block; margin: 12px 0 4px; }
+      input, textarea, select { width: 100%; padding: 6px; box-sizing: border-box; }
+      #result { margin-top: 20px; padding: 10px; border-radius: 6px; white-space: pre-wrap;
+                font: 13px ui-monospace, monospace; }
+      .pass { background: #dcfce7; color: #166534; }
+      .fail { background: #fee2e2; color: #991b1b; }
+    </style>
+  </head>
+  <body>
+    <h1>Test form</h1>
+    <p>
+      Open this file in Chrome to (a) run the extractFields self-check below, and
+      (b) try the extension: click the toolbar icon → "Fill this form".
+    </p>
+
+    <form id="f">
+      <!-- label via <label for> -->
+      <label for="email">Email address</label>
+      <input type="email" id="email" name="email" />
+
+      <!-- label via wrapping <label> -->
+      <label>Full name
+        <input type="text" name="fullname" />
+      </label>
+
+      <!-- label via aria-label -->
+      <input type="tel" name="phone" aria-label="Phone number" />
+
+      <!-- label via placeholder -->
+      <input type="text" name="city" placeholder="City" />
+
+      <!-- select with options -->
+      <label for="relocate">Willing to relocate?</label>
+      <select id="relocate" name="relocate">
+        <option value="">— choose —</option>
+        <option value="Yes">Yes</option>
+        <option value="No">No</option>
+      </select>
+
+      <!-- textarea -->
+      <label for="why">Why do you want this role?</label>
+      <textarea id="why" name="why" rows="3"></textarea>
+
+      <!-- should be SKIPPED: hidden + submit -->
+      <input type="hidden" name="csrf" value="xyz" />
+      <button type="submit">Submit</button>
+    </form>
+
+    <div id="result"></div>
+
+    <!-- Reuse the exact functions the extension injects — no duplicated logic. -->
+    <script src="inject.js"></script>
+    <script>
+      // Self-check: the smallest thing that fails if the DOM scan or label
+      // resolution breaks. Asserts field count and that every label resolved.
+      (function selfCheck() {
+        const out = document.getElementById('result');
+        const fields = extractFields();
+
+        const checks = [];
+        const expect = (name, cond) => checks.push({ name, ok: !!cond });
+
+        expect('found exactly 6 fillable fields (hidden + submit skipped)', fields.length === 6);
+        expect('every field resolved a non-empty label', fields.every((f) => f.label.length > 0));
+        expect('email label reads "Email address"', fields.find((f) => f.name === 'email')?.label === 'Email address');
+        expect('phone label came from aria-label', fields.find((f) => f.name === 'phone')?.label === 'Phone number');
+        expect('city label came from placeholder', fields.find((f) => f.name === 'city')?.label === 'City');
+        expect('relocate select exposes its options', (fields.find((f) => f.name === 'relocate')?.options || []).includes('Yes'));
+        expect('every field got a data-af-id', fields.every((f) => document.querySelector('[data-af-id="' + f.af_id + '"]')));
+
+        const failed = checks.filter((c) => !c.ok);
+        const lines = checks.map((c) => (c.ok ? '✓ ' : '✗ ') + c.name);
+        out.className = failed.length ? 'fail' : 'pass';
+        out.textContent =
+          (failed.length ? failed.length + ' CHECK(S) FAILED\n\n' : 'ALL CHECKS PASSED\n\n') +
+          lines.join('\n');
+
+        // Also assert in the console so it shows up in automated/dev runs.
+        console.assert(failed.length === 0, 'extractFields self-check failed:', failed);
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,117 @@
+# Smart Autofill
+
+A load-it-yourself Chrome extension that reads any web form and fills it from your saved
+profile. An LLM handles the messy part — matching each field to the right piece of your
+data — so it works on sites it has never seen. Your profile and API key stay in your
+browser; nothing is sent anywhere except the model you configure.
+
+> Bring your own **OpenAI API key**. Runs unpacked (not on the Chrome Web Store).
+
+---
+
+## Why an LLM?
+
+Autofill on arbitrary sites is really one hard problem: **every site labels its fields
+differently** ("Email", "e-mail", `name="applicant_email_2"`). A hardcoded map breaks
+constantly. So the only job the model does is **semantic field matching** — given a
+field's label / name / placeholder, decide which piece of your profile belongs there.
+Plain code does the DOM scan and the actual typing.
+
+---
+
+## Install
+
+1. Clone or download this repo.
+2. Go to `chrome://extensions`, toggle **Developer mode** (top right).
+3. Click **Load unpacked** and select this folder.
+4. The **Smart Autofill** icon appears in your toolbar. (Keep the folder around — deleting
+   it removes the extension.)
+
+## Setup
+
+1. Right-click the icon → **Options** (or click the icon → *Edit profile / API key*).
+2. Paste your **OpenAI API key** (`sk-...`).
+3. Fill in your **Profile JSON**. Click **Load example** to start from a template
+   (`profile.example.json`), then edit it with your real details.
+4. **Save.**
+
+## Use
+
+1. Open any page with a form (job application, contact form, etc.).
+2. Click the **Smart Autofill** icon → **Fill this form**.
+3. Review the highlighted fields, fix anything the model guessed wrong, and **submit
+   yourself**. The extension never submits for you.
+
+---
+
+## Your data & security
+
+- Your **API key** and **profile** live only in `chrome.storage.local` — in your browser,
+  on your machine. They are **never** part of this repository.
+- The only network call is to `api.openai.com`, and only when you click *Fill this form*.
+  That request contains your profile plus the current page's field labels.
+- This is a **public repo with no secrets in it** by design. `profile.example.json` holds
+  fake placeholder data only; `.gitignore` blocks real data files.
+- Keep it personal — your own key, your own resume. Don't route employer data or a
+  company API key through it.
+
+---
+
+## The profile is open-ended
+
+There is **no fixed schema**. Add any keys you want — work authorization, salary
+expectations, addresses, references, saved answers to custom questions, social links —
+and the model matches form fields against whatever is present. Extending your data is
+just editing JSON; no code changes.
+
+---
+
+## How it works
+
+```
+Popup ── click "Fill this form"
+  │
+  ├─ chrome.scripting.executeScript(extractFields)   → scan the page, return field list
+  │        (inject.js, runs in the page)
+  │
+  ├─ fetch api.openai.com  (gpt-4o-mini, JSON-schema structured output)
+  │        profile + fields → [{ af_id, value }]      (popup.js, key stays in the popup)
+  │
+  └─ chrome.scripting.executeScript(fillFields, map) → write values + fire input/change
+           (inject.js, runs in the page)
+```
+
+| File | Role |
+|------|------|
+| `manifest.json` | MV3 config — `activeTab` + `scripting` + `storage`, popup + options page |
+| `popup.html` / `popup.js` | Trigger + orchestration + the OpenAI call |
+| `inject.js` | `extractFields` / `fillFields` — the code injected into the page |
+| `options.html` / `options.js` | Full-tab editor for the API key and profile JSON |
+| `profile.example.json` | Fake starter profile (safe to commit) |
+| `test-form.html` | A sample form + a self-check for `extractFields` |
+
+`activeTab` means the extension only touches a page when **you** click it — no
+always-on host permissions.
+
+---
+
+## Test
+
+Open `test-form.html` in Chrome. It runs a self-check on `extractFields` (field count +
+label resolution) and shows pass/fail on the page. You can also use it as a scratch form:
+click the icon → *Fill this form*.
+
+---
+
+## Roadmap
+
+- **v1 (now):** one structured LLM call returns a field→value map. Simple, works.
+- **v2 (planned):** refactor into an OpenAI **tool-calling agent loop** —
+  `get_profile_section`, `read_field`, `fill_field`, `ask_user`. The model drives, asks
+  when unsure. This is the "agentic AI" version and the main learning goal.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).

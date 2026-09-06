@@ -1,0 +1,35 @@
+{
+  "name": "Jane Doe",
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "email": "jane.doe@example.com",
+  "phone": "+1 555 010 0000",
+  "location": { "city": "Austin", "state": "TX", "country": "USA", "zip": "73301" },
+  "links": {
+    "linkedin": "https://linkedin.com/in/janedoe",
+    "github": "https://github.com/janedoe",
+    "portfolio": "https://janedoe.example.com"
+  },
+  "summary": "Software engineer with 5 years building web applications.",
+  "workAuthorization": "Authorized to work in the US; does not require sponsorship",
+  "salaryExpectation": "Negotiable",
+  "noticePeriod": "2 weeks",
+  "experience": [
+    {
+      "company": "Acme Corp",
+      "title": "Senior Software Engineer",
+      "start": "2022-01",
+      "end": "present",
+      "location": "Remote",
+      "highlights": ["Led migration to TypeScript", "Cut build time by 40%"]
+    }
+  ],
+  "education": [
+    { "school": "State University", "degree": "BSc Computer Science", "year": "2018" }
+  ],
+  "skills": ["JavaScript", "TypeScript", "React", "Node.js", "Python"],
+  "answers": {
+    "why_this_role": "I enjoy building products that help people, and this team's work aligns with my experience.",
+    "willing_to_relocate": "No"
+  }
+}

@@ -1,0 +1,21 @@
+# Secrets & real personal data — NEVER commit these.
+# The API key and real profile live in chrome.storage.local at runtime, not in files.
+# These patterns just guard against accidentally saving real data to disk.
+.env
+.env.*
+*.local.json
+profile.json
+profile.local.json
+secrets*.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Node (only if tooling is added later)
+node_modules/
+npm-debug.log*
+yarn-error.log*

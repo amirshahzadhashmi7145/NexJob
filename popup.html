@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { width: 260px; font: 14px system-ui, sans-serif; margin: 0; padding: 14px; }
+      h1 { font-size: 15px; margin: 0 0 10px; }
+      button { width: 100%; padding: 10px; font-size: 14px; cursor: pointer;
+               border: 0; border-radius: 6px; background: #2563eb; color: #fff; }
+      button:hover { background: #1d4ed8; }
+      #status { min-height: 18px; margin: 10px 0 6px; color: #374151; font-size: 13px; }
+      a { font-size: 12px; color: #2563eb; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <h1>Smart Autofill</h1>
+    <button id="fill">Fill this form</button>
+    <p id="status"></p>
+    <a href="#" id="opts">Edit profile / API key</a>
+    <script src="inject.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
