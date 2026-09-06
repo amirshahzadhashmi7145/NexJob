@@ -40,11 +40,16 @@ Plain code does the DOM scan and the actual typing.
 ## Use
 
 1. Open any page with a form (job application, contact form, etc.).
-2. Click the **NexJob** icon → **Fill this form**.
-3. Anything it couldn't fill appears in a **"needs your input"** panel — type the answers,
-   click **Save & fill**, and they're filled *and remembered* (see below).
+2. Click the floating **⚡ button** at the bottom-right of the page. (No need to open the
+   toolbar popup — though the popup's "Fill this form" does the same thing.)
+3. Anything it couldn't fill appears in an on-page **"needs your input"** panel — type the
+   answers or tap the Yes/No options, click **Save & fill**, and they're filled *and
+   remembered* (see below).
 4. Review the highlighted fields, fix anything the model guessed wrong, and **submit
    yourself**. The extension never submits for you.
+
+> After installing or updating, **reload any page** you already had open so the floating
+> button appears on it.
 
 ## Learns as you go
 
@@ -98,15 +103,17 @@ Popup ── click "Fill this form"
 
 | File | Role |
 |------|------|
-| `manifest.json` | MV3 config — `activeTab` + `scripting` + `storage`, popup + options page |
-| `popup.html` / `popup.js` | Trigger + orchestration + the OpenAI call |
-| `inject.js` | `extractFields` / `fillFields` — the code injected into the page |
-| `options.html` / `options.js` | Full-tab editor for the API key and profile JSON |
+| `manifest.json` | MV3 config — content script (all pages) + background worker + options page |
+| `content.js` | Injects the floating ⚡ button + in-page panel; runs the fill flow (DOM access) |
+| `inject.js` | `extractFields` / `fillFields` / `getFieldHTML` / `runActions` — the DOM helpers |
+| `background.js` | Service worker — the OpenAI calls + storage (keeps the API key out of the page) |
+| `popup.html` / `popup.js` | Toolbar shortcut that tells the page to run the flow |
+| `options.html` / `options.js` | Full-tab editor for the API key, profile JSON, and the executor toggle |
 | `profile.example.json` | Fake starter profile (safe to commit) |
 | `test-form.html` | A sample form + a self-check for `extractFields` |
 
-`activeTab` means the extension only touches a page when **you** click it — no
-always-on host permissions.
+The API key lives in `chrome.storage.local` and is used only by the background worker's
+`fetch` — it never enters the web page or the content script.
 
 ---
 

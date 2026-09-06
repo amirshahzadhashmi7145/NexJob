@@ -11,16 +11,12 @@ function extractFields() {
   const SELECTOR =
     'input, textarea, select, [contenteditable="true"], ' +
     '[role="textbox"], [role="combobox"], [aria-haspopup="listbox"], ' +
-    '[role="radio"], [role="checkbox"], [role="switch"], [aria-pressed], ' +
-    // choice buttons live only inside a question group (avoids grabbing Submit/Next):
-    '[role="radiogroup"] button, [role="group"] button, fieldset button, ' +
-    '[role="radiogroup"] [role="button"], [role="group"] [role="button"], fieldset [role="button"]';
+    '[role="radio"], [role="checkbox"], [role="switch"]';
   const SKIP = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
 
   const NATIVE = 'input, textarea, select';
-  // Words that mean "this button does an action" (never a choice option).
-  const ACTION_RE =
-    /^(submit|next|back|prev|previous|continue|save|cancel|apply|upload|add|remove|delete|edit|search|clear|close|skip|browse|choose file|log ?in|sign ?in|sign ?up)/i;
+  // Option text that is actually a file/resume — never a fillable choice question.
+  const FILE_RE = /\.(pdf|docx?|rtf|txt|pptx?|xlsx?|csv|png|jpe?g|gif|zip)\b/i;
 
   function isWidget(el) {
     const role = el.getAttribute('role');
@@ -94,39 +90,46 @@ function extractFields() {
   function isChoice(el) {
     const t = (el.getAttribute('type') || '').toLowerCase();
     const r = el.getAttribute('role');
-    if (t === 'radio' || t === 'checkbox' || r === 'radio' || r === 'checkbox' || r === 'switch') return true;
-    if (el.hasAttribute('aria-pressed')) return true;
-    // A button / role=button inside a question group, that isn't an action button.
-    if ((el.tagName === 'BUTTON' || r === 'button') && el.closest('[role="radiogroup"], [role="group"], fieldset')) {
-      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      return txt.length > 0 && txt.length <= 40 && !ACTION_RE.test(txt);
-    }
-    return false;
+    return t === 'radio' || t === 'checkbox' || r === 'radio' || r === 'checkbox' || r === 'switch';
   }
 
   // The SHORT label for one choice option ("Yes"), distinct from the group's question.
-  // Many forms give the radio's accessible name as the whole question, so we gather several
-  // candidates and take the shortest one that isn't the question.
+  // Forms bury this differently, so we try several sources in priority order — value/data
+  // attributes first (native radios carry "yes"/"no"), then a short inner text, then the
+  // accessibility text (which often wrongly resolves to the whole question — we strip that).
   function optionLabel(el, q) {
     const nq = (q || '').replace(/\s+/g, ' ').trim();
-    const cands = [];
-    if (!el.matches(NATIVE)) cands.push(el.textContent);
-    if (el.labels && el.labels[0]) cands.push(el.labels[0].textContent);
-    const wrap = el.closest('label');
-    if (wrap) cands.push(wrap.textContent);
-    cands.push(el.getAttribute('aria-label'));
-    if (el.nextElementSibling) cands.push(el.nextElementSibling.textContent);
-    if (el.previousElementSibling) cands.push(el.previousElementSibling.textContent);
-    cands.push(el.value);
-    let best = '';
-    for (let c of cands) {
-      if (!c) continue;
-      c = c.replace(/\s+/g, ' ').trim();
-      if (nq && c.includes(nq)) c = c.replace(nq, '').replace(/^[\s\-—–:*|]+/, '').trim();
-      if (!c || c === nq) continue;
-      if (!best || c.length < best.length) best = c; // shortest wins ("Yes" over the question)
+    const tidy = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+    const clean = (raw) => {
+      if (!raw) return '';
+      let c = String(raw).replace(/\s+/g, ' ').trim();
+      if (nq && c.includes(nq)) {
+        c = c.replace(nq, '').replace(/^[\s\-—–:*|()]+/, '').replace(/[\s*]+$/, '').trim();
+      }
+      return c;
+    };
+    const good = (c) => c && c !== nq && c.length <= 40 && /[a-z0-9]/i.test(c);
+
+    // 1) explicit value / data attributes
+    for (const a of ['value', 'data-value', 'data-option', 'aria-label']) {
+      const c = clean(el.getAttribute(a));
+      if (good(c)) return tidy(c);
     }
-    return best || (el.value || '').trim();
+    // 2) a short descendant text node (a <span>/<label> rendering "Yes")
+    for (const d of el.querySelectorAll('span, label, div, p')) {
+      const c = clean(d.textContent);
+      if (good(c)) return tidy(c);
+    }
+    // 3) associated <label> / the element's own text
+    for (const raw of [
+      el.labels && el.labels[0] ? el.labels[0].textContent : '',
+      el.closest('label') ? el.closest('label').textContent : '',
+      el.matches(NATIVE) ? '' : el.textContent,
+    ]) {
+      const c = clean(raw);
+      if (good(c)) return tidy(c);
+    }
+    return tidy(clean(el.value)) || '';
   }
 
   // If a modal/dialog is open (LinkedIn Easy Apply, most apply-in-place forms), scan ONLY
@@ -175,6 +178,7 @@ function extractFields() {
     if (choice) {
       q = groupQuestion(el).replace(/\s+/g, ' ').trim();
       own = optionLabel(el, q); // "Yes"/"No", not the whole question
+      if (FILE_RE.test(own) || FILE_RE.test(el.textContent || '')) continue; // resume/file picker, skip
       label = q ? q + ' — ' + own : own;
     }
     label = label.replace(/\s+/g, ' ').trim().slice(0, choice ? 300 : 200);
@@ -269,17 +273,51 @@ async function fillFields(mappings) {
     return opts;
   }
 
+  // A search box that appears inside an opened panel is often a DIFFERENT element than the
+  // trigger you clicked (Workday/Thingtrax location pickers do this). Find it so we type there.
+  function findSearchInput(trigger) {
+    const inputs = Array.from(
+      document.querySelectorAll(
+        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])',
+      ),
+    ).filter(visible).filter((i) => i !== trigger);
+    // Prefer one that lives inside a freshly-opened container.
+    return (
+      inputs.find((i) =>
+        i.closest(
+          '[aria-expanded="true"], [role="dialog"], [role="listbox"], [class*="open"], [class*="menu"], [class*="popover"], [class*="dropdown"]',
+        ),
+      ) || null
+    );
+  }
+
+  function typeInto(input, value) {
+    input.focus();
+    if (input.isContentEditable) {
+      input.textContent = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      setNativeValue(input, value);
+      fireInput(input);
+      // Nudge widgets that filter on keystrokes (use a harmless char key, never Enter/Escape).
+      const k = value.slice(-1) || 'a';
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: k, bubbles: true }));
+    }
+  }
+
   async function fillWidget(el, value) {
     el.focus();
-    el.click(); // open the dropdown
-    // Autocomplete text inputs need the value typed to trigger suggestions.
-    if (el.tagName === 'INPUT') {
-      setNativeValue(el, value);
-      fireInput(el);
-    } else if (el.isContentEditable) {
-      el.textContent = value;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.click(); // open the dropdown / panel
+
+    // Decide where to type: the trigger itself, or a search box that appears in the panel.
+    let typeEl = el.tagName === 'INPUT' || el.isContentEditable ? el : null;
+    if (!typeEl) {
+      await sleep(150); // let a popup search input render
+      typeEl = findSearchInput(el);
     }
+    if (typeEl) typeInto(typeEl, value);
+
     const pick = (list) =>
       list.find((o) => norm(o.textContent) === norm(value)) ||
       list.find((o) => norm(o.textContent).startsWith(norm(value))) ||
@@ -288,12 +326,12 @@ async function fillFields(mappings) {
     let opts = await waitForOptions(2500);
     let match = pick(opts);
 
-    // The typed text may have filtered the list to nothing. If there WERE options (so this
-    // is a real dropdown, not a free-text box), clear the filter so all options — including
-    // an "Other" — come back, then re-pick.
-    if (!match && opts.length && el.tagName === 'INPUT') {
-      setNativeValue(el, '');
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+    // The typed text may have filtered the list to nothing. If there WERE options (so this is
+    // a real dropdown, not a free-text box), clear the filter so all options — including an
+    // "Other" — come back, then re-pick.
+    if (!match && opts.length && typeEl && typeEl.tagName === 'INPUT') {
+      setNativeValue(typeEl, '');
+      typeEl.dispatchEvent(new Event('input', { bubbles: true }));
       opts = await waitForOptions(1200);
       match = pick(opts);
     }
@@ -305,12 +343,11 @@ async function fillFields(mappings) {
       match.click();
       return true;
     }
-    // No match at all: keep the typed value (free-text autocompletes accept it) and close
-    // any open list GENTLY by blurring. Never press Escape/Enter — those bubble to the page
-    // and can close the whole modal (e.g. LinkedIn Easy Apply's "Save application?") or
-    // submit the form.
-    el.blur();
-    return el.tagName === 'INPUT';
+    // No match at all: keep any typed value (free-text autocompletes accept it) and close the
+    // list GENTLY by blurring. Never press Escape/Enter — those bubble to the page and can
+    // close the whole modal (LinkedIn Easy Apply's "Save application?") or submit the form.
+    (typeEl || el).blur();
+    return !!(typeEl && typeEl.tagName === 'INPUT'); // typed free-text left in place
   }
 
   const filledIds = [];
@@ -344,15 +381,13 @@ async function fillFields(mappings) {
         if (match) { el.value = match.value; fireInput(el); ok = true; }
       } else if (
         type === 'checkbox' || type === 'radio' ||
-        role === 'radio' || role === 'checkbox' || role === 'switch' ||
-        el.hasAttribute('aria-pressed') || tag === 'button' || role === 'button'
+        role === 'radio' || role === 'checkbox' || role === 'switch'
       ) {
         const native = type === 'checkbox' || type === 'radio';
         const desired = /^(true|yes|on|1|checked|selected)$/i.test(value.trim());
         let current = false;
         if (native) current = el.checked;
         else if (el.hasAttribute('aria-checked')) current = el.getAttribute('aria-checked') === 'true';
-        else if (el.hasAttribute('aria-pressed')) current = el.getAttribute('aria-pressed') === 'true';
         // Click to change state (fires native events). Only ever click to turn ON — the
         // model / user picks one option, and we never toggle another off.
         if (current !== desired && (desired || native)) el.click();

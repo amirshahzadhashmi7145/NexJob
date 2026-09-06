@@ -5,69 +5,29 @@
     <style>
       * { box-sizing: border-box; }
       body {
-        width: 340px; margin: 0; color: #111827; background: #fff;
+        width: 300px; margin: 0; color: #111827; background: #fff;
         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       }
       @keyframes fadeInUp { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
       @keyframes dropIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
-      @keyframes spin { to { transform: rotate(360deg); } }
       @keyframes floaty { 0%, 100% { transform: none; } 50% { transform: translateY(-2px) rotate(-4deg); } }
-
       header {
         background: linear-gradient(135deg, #6366f1, #2563eb); color: #fff;
-        padding: 14px 16px; display: flex; align-items: center; gap: 10px;
-        animation: dropIn 0.3s ease both;
+        padding: 14px 16px; display: flex; align-items: center; gap: 10px; animation: dropIn 0.3s ease both;
       }
-      header .logo {
-        width: 26px; height: 26px; border-radius: 7px; display: block;
-        animation: floaty 4s ease-in-out infinite; transition: transform 0.25s;
-      }
-      header:hover .logo { animation-play-state: paused; transform: rotate(-6deg) scale(1.08); }
+      header .logo { width: 26px; height: 26px; border-radius: 7px; display: block; animation: floaty 4s ease-in-out infinite; }
       header h1 { font-size: 15px; margin: 0; font-weight: 600; }
       header p { margin: 2px 0 0; font-size: 11px; opacity: 0.85; }
-
       main { padding: 16px; animation: fadeInUp 0.32s ease both; animation-delay: 0.06s; }
       .btn {
-        width: 100%; padding: 11px; border: 0; border-radius: 10px; cursor: pointer;
-        font: 600 14px system-ui; background: #2563eb; color: #fff;
-        transition: background 0.15s, transform 0.12s, box-shadow 0.15s;
+        width: 100%; padding: 11px; border: 0; border-radius: 10px; cursor: pointer; font: 600 14px system-ui;
+        background: #2563eb; color: #fff; transition: background 0.15s, transform 0.12s, box-shadow 0.15s;
         box-shadow: 0 1px 2px rgba(37, 99, 235, 0.3);
       }
       .btn:hover { background: #1d4ed8; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35); }
-      .btn:active { transform: translateY(0); box-shadow: 0 1px 2px rgba(37, 99, 235, 0.3); }
-      .btn:disabled { opacity: 0.6; cursor: default; transform: none; box-shadow: none; }
-      .btn.secondary { background: #eef2ff; color: #3730a3; box-shadow: none; }
-      .btn.secondary:hover { background: #e0e7ff; }
-      .row { display: flex; gap: 8px; margin-top: 10px; }
-
-      #status {
-        margin-top: 12px; font-size: 13px; color: #374151; min-height: 18px;
-        display: flex; align-items: center; gap: 7px;
-      }
-      #status.ok { color: #166534; } #status.err { color: #b91c1c; } #status.busy { color: #1d4ed8; }
-      .spinner {
-        width: 13px; height: 13px; border: 2px solid #bfdbfe; border-top-color: #2563eb;
-        border-radius: 50%; animation: spin 0.7s linear infinite; flex: none;
-      }
-
-      #missing { margin-top: 14px; display: none; }
-      #missing.show { display: block; animation: dropIn 0.22s ease both; }
-      #missing h2 { font-size: 12px; margin: 0 0 10px; color: #374151; font-weight: 600; }
-      .field { margin-bottom: 11px; animation: fadeInUp 0.25s ease both; }
-      .field label { display: block; font-size: 12px; color: #4b5563; margin-bottom: 4px; }
-      .field input, .field textarea {
-        width: 100%; padding: 7px 9px; border: 1px solid #d1d5db; border-radius: 8px;
-        font: 13px system-ui; resize: vertical; transition: border-color 0.15s, box-shadow 0.15s;
-      }
-      .field input:focus, .field textarea:focus { outline: 0; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15); }
-      .field.group .opts { display: flex; flex-wrap: wrap; gap: 6px; }
-      .opt {
-        padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 999px; background: #fff;
-        font: 13px system-ui; color: #374151; cursor: pointer; transition: all 0.15s;
-      }
-      .opt:hover { border-color: #2563eb; color: #2563eb; }
-      .opt.sel { background: #2563eb; border-color: #2563eb; color: #fff; }
-
+      .tip { margin: 12px 0 0; font-size: 12px; color: #6b7280; }
+      .tip b { color: #374151; }
+      #status { margin-top: 10px; font-size: 12px; color: #b91c1c; min-height: 16px; }
       footer { padding: 10px 14px 14px; border-top: 1px solid #eef2ff; text-align: center; animation: fadeInUp 0.4s ease both; animation-delay: 0.12s; }
       footer .settings { display: inline-block; font-size: 12px; color: #2563eb; text-decoration: none; margin-bottom: 9px; }
       footer .settings:hover { text-decoration: underline; }
@@ -90,16 +50,8 @@
 
     <main>
       <button id="fill" class="btn">Fill this form</button>
+      <p class="tip">Tip: you don't need this popup — just click the floating <b>⚡ button</b> at the bottom-right of any page.</p>
       <div id="status"></div>
-
-      <div id="missing">
-        <h2>A few fields I couldn't fill — answer once and I'll remember them:</h2>
-        <div id="missingList"></div>
-        <div class="row">
-          <button id="saveMissing" class="btn">Save &amp; fill</button>
-          <button id="skipMissing" class="btn secondary">Skip</button>
-        </div>
-      </div>
     </main>
 
     <footer>
@@ -117,7 +69,6 @@
       </div>
     </footer>
 
-    <script src="inject.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
