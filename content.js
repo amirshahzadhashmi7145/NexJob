@@ -7,24 +7,52 @@
   if (window.__nexjob) return; // avoid double-injection
   window.__nexjob = true;
 
+  // True while this content script is still connected to the extension. After the extension
+  // is reloaded/updated, old content scripts on open tabs become "orphaned" — chrome.runtime.id
+  // goes undefined and any chrome.* call fails (the chrome-extension://invalid/ console spam).
+  const alive = () => !!(chrome.runtime && chrome.runtime.id);
+
   const send = (msg) =>
-    new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => resolve(r || { ok: false })));
+    new Promise((resolve) => {
+      if (!alive()) return resolve({ ok: false, error: 'Extension was updated — refresh this page.' });
+      try {
+        chrome.runtime.sendMessage(msg, (r) =>
+          resolve(r || { ok: false, error: chrome.runtime.lastError?.message || 'no response' }),
+        );
+      } catch {
+        resolve({ ok: false, error: 'Extension was updated — refresh this page.' });
+      }
+    });
 
   // ---- UI (shadow DOM) ---------------------------------------------------
   const host = document.createElement('div');
-  host.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;';
   const shadow = host.attachShadow({ mode: 'open' });
+  // Use !important so page CSS can't override our positioning/stacking.
+  const hostStyle = {
+    position: 'fixed', top: '0', left: '0', width: '0', height: '0', 'z-index': '2147483647',
+  };
+  for (const k in hostStyle) host.style.setProperty(k, hostStyle[k], 'important');
   document.documentElement.appendChild(host);
 
   // Modals (LinkedIn Easy Apply, etc.) inject a top-level node AFTER us and, at the same
-  // z-index, paint on top — hiding/blocking our button. Keep our host the LAST element in
-  // <html> so it always stays clickable above late-added overlays.
-  function ensureTop() {
-    if (document.documentElement.lastElementChild !== host) {
-      document.documentElement.appendChild(host);
+  // max z-index, win on DOM order — hiding/blocking our button. Keep our host the LAST
+  // element in <html> so it always stays clickable above late-added overlays. The interval
+  // covers libraries that re-append their own modal after us.
+  // Minimal footprint: our host lives as a child of <html>, outside the page's React root.
+  // We DON'T fight for stacking order or re-append on a timer (that churn is what irritates
+  // React SPAs). We only put the node back if the page removes it, and we shut down cleanly
+  // if this script is ever orphaned by an extension reload.
+  let obs = null;
+  function guard() {
+    if (!alive()) {
+      if (obs) obs.disconnect();
+      if (host.parentNode) host.remove();
+      return;
     }
+    if (!host.isConnected) document.documentElement.appendChild(host);
   }
-  new MutationObserver(ensureTop).observe(document.documentElement, { childList: true });
+  obs = new MutationObserver(guard);
+  obs.observe(document.documentElement, { childList: true });
 
   shadow.innerHTML = `
     <style>
