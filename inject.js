@@ -172,12 +172,6 @@ async function fillFields(mappings) {
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  function pressKey(el, key) {
-    for (const t of ['keydown', 'keyup']) {
-      el.dispatchEvent(new KeyboardEvent(t, { key, code: key, bubbles: true }));
-    }
-  }
-
   function openOptions() {
     let opts = Array.from(document.querySelectorAll('[role="option"]')).filter(visible);
     if (!opts.length) {
@@ -220,9 +214,11 @@ async function fillFields(mappings) {
       match.click();
       return true;
     }
-    // No listbox match: for free-text autocompletes the typed value may be accepted.
-    pressKey(el, 'Enter');
-    pressKey(el, 'Escape'); // close any lingering list
+    // No match: keep the typed value (free-text autocompletes accept it) and close any
+    // open list GENTLY by blurring. Never press Escape/Enter — those bubble to the page
+    // and can close the whole modal (e.g. LinkedIn Easy Apply's "Save application?") or
+    // submit the form.
+    el.blur();
     return el.tagName === 'INPUT';
   }
 
