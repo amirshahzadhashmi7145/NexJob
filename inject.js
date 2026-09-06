@@ -62,11 +62,29 @@ function extractFields() {
     return label;
   }
 
+  // If a modal/dialog is open (LinkedIn Easy Apply, most apply-in-place forms), scan ONLY
+  // inside it — otherwise we'd also grab the search bar / filters on the page behind it.
+  function pickRoot() {
+    const dialogs = Array.from(
+      document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]'),
+    ).filter((d) => {
+      const r = d.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    if (!dialogs.length) return document;
+    // The dialog with the most fields is the form the user means (ignores nav/search behind).
+    const best = dialogs
+      .map((d) => ({ d, n: d.querySelectorAll('input, textarea, select, [role="combobox"]').length }))
+      .sort((a, b) => b.n - a.n)[0];
+    return best.n > 0 ? best.d : document;
+  }
+
+  const root = pickRoot();
   const fields = [];
   const seen = new Set();
   let i = 0;
 
-  for (const el of document.querySelectorAll(SELECTOR)) {
+  for (const el of root.querySelectorAll(SELECTOR)) {
     if (seen.has(el)) continue; // one element can match the selector twice
     seen.add(el);
 
