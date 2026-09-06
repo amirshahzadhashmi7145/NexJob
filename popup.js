@@ -66,6 +66,10 @@ async function mapFields(apiKey, profile, fields) {
     '- A field with "widget": true is a custom dropdown/autocomplete with no options listed.\n' +
     '  Give the best full value from the profile (e.g. the full country/state/city name); the\n' +
     '  extension opens the widget and clicks the closest match.\n' +
+    '- For long free-text / essay / screening questions (textarea, or a long question label),\n' +
+    '  ONLY fill from a matching pre-written answer in the profile (e.g. under "answers").\n' +
+    '  Use that answer VERBATIM. Do NOT compose, rephrase, summarize, or invent prose. If no\n' +
+    '  matching pre-written answer exists, OMIT the field so the user writes it themselves.\n' +
     '- Keep values concise plain text. Do not invent data that is not in the profile.';
 
   const body = {

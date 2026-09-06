@@ -28,8 +28,13 @@
     { "school": "State University", "degree": "BSc Computer Science", "year": "2018" }
   ],
   "skills": ["JavaScript", "TypeScript", "React", "Node.js", "Python"],
+
+  "_comment_answers": "Pre-written answers to common screening/essay questions. The tool pastes these VERBATIM and never invents essay prose. Write these in your own words. If a question has no matching answer here, the field is left blank for you to write yourself.",
   "answers": {
     "why_this_role": "I enjoy building products that help people, and this team's work aligns with my experience.",
-    "willing_to_relocate": "No"
+    "willing_to_relocate": "No",
+    "ai_llm_experience": "Write your own detailed answer here: what LLM systems you have built or deployed in production, the problem, your role, and the outcome.",
+    "ai_frameworks_used": "Write your own answer here: the specific AI/ML tools and frameworks you have hands-on experience with.",
+    "biggest_challenge": "Write your own answer here."
   }
 }
