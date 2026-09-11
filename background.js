@@ -176,7 +176,9 @@ async function chat(apiKey, profile, messages) {
     'edit text for job applications — emails, cover notes, short answers — in their voice, first ' +
     'person. Use real details from the profile (name, links, experience) when relevant; never ' +
     'invent facts not present. When they ask for edits, return the full revised text. Reply with ' +
-    'ONLY the text they can paste — no preamble, no "Here is", no markdown fences.\n\nPROFILE:\n' +
+    'ONLY the text they can paste — no preamble, no "Here is". Output PLAIN TEXT: no markdown ' +
+    'whatsoever — no **bold**, no *italics*, no backticks, no # headings, no "- " or "* " bullet ' +
+    'markers. Use real line breaks and blank lines for structure, nothing else.\n\nPROFILE:\n' +
     (profile || '{}');
 
   const data = await callOpenAI(apiKey, {
@@ -184,7 +186,19 @@ async function chat(apiKey, profile, messages) {
     temperature: 0.5, // some creativity for prose, still grounded in the profile
     messages: [{ role: 'system', content: system }, ...messages],
   });
-  return data.choices?.[0]?.message?.content?.trim() || '';
+  return stripMarkdown(data.choices?.[0]?.message?.content?.trim() || '');
+}
+
+// Belt-and-suspenders: strip stray markdown the model may still emit, so pasted text is clean.
+function stripMarkdown(t) {
+  return t
+    .replace(/^```[\w]*\n?|```$/g, '') // fenced code blocks
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '') // # headings
+    .replace(/^\s*[-*+]\s+/gm, '') // - / * / + bullet markers
+    .replace(/\*\*(.+?)\*\*/g, '$1') // **bold**
+    .replace(/(^|[^*])\*(?!\*)([^*\n]+?)\*/g, '$1$2') // *italics* (not list stars)
+    .replace(/`([^`]+)`/g, '$1') // `code`
+    .trim();
 }
 
 async function callOpenAI(apiKey, body) {

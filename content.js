@@ -196,8 +196,22 @@
   function setFieldValue(el, text) {
     el.focus();
     if (el.isContentEditable) {
-      el.textContent = text;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      // Select all existing content, then let the editor insert — this turns \n into the
+      // editor's own line breaks (<br>/<div>) and fires its framework handlers.
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      if (!document.execCommand('insertText', false, text)) {
+        // Fallback if execCommand is unavailable: build <br>-separated lines safely.
+        el.textContent = '';
+        text.split('\n').forEach((line, i) => {
+          if (i) el.appendChild(document.createElement('br'));
+          el.appendChild(document.createTextNode(line));
+        });
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
       return;
     }
     const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
