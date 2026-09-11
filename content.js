@@ -103,10 +103,43 @@
         background: #2563eb; color: #fff; }
       .btn.secondary { background: #eef2ff; color: #3730a3; }
       .btn:hover { filter: brightness(1.05); }
+      .chatbtn {
+        position: fixed; top: 78px; right: 140px; width: 40px; height: 40px; border: 0; border-radius: 50%;
+        cursor: pointer; background: #fff; color: #2563eb; font-size: 17px; line-height: 1;
+        box-shadow: 0 6px 18px rgba(0,0,0,.18); display: inline-flex; align-items: center; justify-content: center;
+        transition: transform .18s, box-shadow .18s;
+      }
+      .chatbtn:hover { transform: translateY(-1px) scale(1.06); box-shadow: 0 10px 24px rgba(0,0,0,.24); }
+      .chat {
+        position: fixed; right: 20px; top: 128px; width: 340px; max-height: 74vh; display: none;
+        flex-direction: column; background: #fff; color: #111827; border-radius: 14px; overflow: hidden;
+        box-shadow: 0 12px 34px rgba(0,0,0,.28); font: 14px/1.45 system-ui, sans-serif; animation: nj-in .22s ease;
+      }
+      .chat.show { display: flex; }
+      .chat-head { padding: 11px 14px; font: 600 13px system-ui; color: #fff;
+        background: linear-gradient(135deg, #6366f1, #2563eb); display: flex; justify-content: space-between; align-items: center; }
+      .chat-close { cursor: pointer; opacity: .85; }
+      .chat-close:hover { opacity: 1; }
+      .chat-msgs { overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 110px; max-height: 46vh; }
+      .chat-empty { color: #9ca3af; font-size: 12px; text-align: center; margin: 14px 4px; }
+      .msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 13px; white-space: pre-wrap; word-wrap: break-word; }
+      .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+      .msg.ai { align-self: flex-start; background: #f3f4f6; color: #111827; border-bottom-left-radius: 4px; }
+      .msg-actions { display: flex; gap: 6px; margin-top: 7px; }
+      .msg-actions button { font: 600 11px system-ui; padding: 4px 9px; border-radius: 7px; border: 1px solid #d1d5db;
+        background: #fff; color: #374151; cursor: pointer; }
+      .msg-actions button:hover { border-color: #2563eb; color: #2563eb; }
+      .chat-input { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eef2ff; }
+      .chat-input textarea { flex: 1; box-sizing: border-box; padding: 8px; border: 1px solid #d1d5db; border-radius: 9px;
+        font: 13px system-ui; resize: none; }
+      .chat-input textarea:focus { outline: 0; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
+      .chat-input button { padding: 0 14px; border: 0; border-radius: 9px; background: #2563eb; color: #fff;
+        font: 600 13px system-ui; cursor: pointer; }
     </style>
     <button class="fab" id="fab" title="NexJob — fill this form">
       <span class="bolt">⚡</span><span class="ring"></span><span class="txt">Fill form</span>
     </button>
+    <button class="chatbtn" id="chatBtn" title="Ask AI to write / edit text">💬</button>
     <div class="toast" id="toast"></div>
     <div class="panel" id="panel">
       <h2>A few fields I couldn't fill — answer once and I'll remember them:</h2>
@@ -114,6 +147,16 @@
       <div class="row">
         <button class="btn" id="save">Save &amp; fill</button>
         <button class="btn secondary" id="skip">Skip</button>
+      </div>
+    </div>
+    <div class="chat" id="chat">
+      <div class="chat-head"><span>💬 Ask AI to write / edit</span><span class="chat-close" id="chatClose">✕</span></div>
+      <div class="chat-msgs" id="chatMsgs">
+        <div class="chat-empty">Ask me to write or edit text — e.g. "write a 2-line cover note about me", or paste text and say "make this formal". Then Insert it into the field you last clicked.</div>
+      </div>
+      <div class="chat-input">
+        <textarea id="chatText" rows="2" placeholder="Type a request…"></textarea>
+        <button id="chatSend">Send</button>
       </div>
     </div>`;
 
@@ -136,6 +179,115 @@
   $('skip').addEventListener('click', () => panel.classList.remove('show'));
   $('save').addEventListener('click', saveMissing);
   chrome.runtime.onMessage.addListener((m) => { if (m.type === 'runFill') runFill(); });
+
+  // ---- chat: track the last page field the user focused, so "Insert" knows where to write.
+  // Focus inside our shadow retargets to `host` at the document level, so we ignore that.
+  let lastField = null;
+  document.addEventListener(
+    'focusin',
+    (e) => {
+      const t = e.target;
+      if (!t || t === host) return;
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) lastField = t;
+    },
+    true,
+  );
+
+  function setFieldValue(el, text) {
+    el.focus();
+    if (el.isContentEditable) {
+      el.textContent = text;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const d = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (d && d.set) d.set.call(el, text);
+    else el.value = text;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  async function copyText(t) {
+    try {
+      await navigator.clipboard.writeText(t);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = t;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch {}
+      ta.remove();
+    }
+    toast('Copied.', 'ok');
+  }
+
+  const chatEl = $('chat');
+  const chatMsgs = $('chatMsgs');
+  const chatText = $('chatText');
+  const chatHistory = [];
+
+  $('chatBtn').addEventListener('click', () => {
+    bringToTop();
+    panel.classList.remove('show');
+    chatEl.classList.toggle('show');
+    if (chatEl.classList.contains('show')) chatText.focus();
+  });
+  $('chatClose').addEventListener('click', () => chatEl.classList.remove('show'));
+  $('chatSend').addEventListener('click', sendChat);
+  chatText.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
+  });
+
+  function addBubble(role, text) {
+    const empty = chatMsgs.querySelector('.chat-empty');
+    if (empty) empty.remove();
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.textContent = text;
+    chatMsgs.appendChild(div);
+    chatMsgs.scrollTop = chatMsgs.scrollHeight;
+    return div;
+  }
+
+  async function sendChat() {
+    const text = chatText.value.trim();
+    if (!text) return;
+    addBubble('user', text);
+    chatHistory.push({ role: 'user', content: text });
+    chatText.value = '';
+    const bubble = addBubble('ai', '…');
+    const res = await send({ type: 'chat', messages: chatHistory });
+    if (!res.ok) {
+      bubble.textContent = 'Error: ' + res.error;
+      return;
+    }
+    const reply = res.reply || '(no response)';
+    chatHistory.push({ role: 'assistant', content: reply });
+    bubble.textContent = reply;
+
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    const ins = document.createElement('button');
+    ins.textContent = 'Insert';
+    ins.addEventListener('click', () => {
+      if (!lastField || !lastField.isConnected) {
+        return toast('Click a text field on the page first, then Insert.', 'err');
+      }
+      setFieldValue(lastField, reply);
+      toast('Inserted into the field.', 'ok');
+    });
+    const cp = document.createElement('button');
+    cp.textContent = 'Copy';
+    cp.addEventListener('click', () => copyText(reply));
+    actions.appendChild(ins);
+    actions.appendChild(cp);
+    bubble.appendChild(actions);
+    chatMsgs.scrollTop = chatMsgs.scrollHeight;
+  }
 
   // ---- flow --------------------------------------------------------------
   async function runFill() {

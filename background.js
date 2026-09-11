@@ -13,6 +13,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } else if (msg.type === 'plan') {
         const { apiKey } = await chrome.storage.local.get('apiKey');
         sendResponse({ ok: true, actions: await planActions(apiKey, msg.field, msg.value, msg.html) });
+      } else if (msg.type === 'chat') {
+        const { apiKey, profile } = await chrome.storage.local.get(['apiKey', 'profile']);
+        sendResponse({ ok: true, reply: await chat(apiKey, profile, msg.messages) });
       } else if (msg.type === 'remember') {
         await remember(msg.entries);
         sendResponse({ ok: true });
@@ -163,6 +166,25 @@ async function planActions(apiKey, field, value, html) {
   } catch {
     return [];
   }
+}
+
+// In-page writing assistant: writes/edits text (emails, cover notes) as the user.
+async function chat(apiKey, profile, messages) {
+  if (!apiKey) throw new Error('No API key — add one in settings.');
+  const system =
+    "You are a writing assistant for the user whose profile JSON is below. Help them write and " +
+    'edit text for job applications — emails, cover notes, short answers — in their voice, first ' +
+    'person. Use real details from the profile (name, links, experience) when relevant; never ' +
+    'invent facts not present. When they ask for edits, return the full revised text. Reply with ' +
+    'ONLY the text they can paste — no preamble, no "Here is", no markdown fences.\n\nPROFILE:\n' +
+    (profile || '{}');
+
+  const data = await callOpenAI(apiKey, {
+    model: 'gpt-4o-mini',
+    temperature: 0.5, // some creativity for prose, still grounded in the profile
+    messages: [{ role: 'system', content: system }, ...messages],
+  });
+  return data.choices?.[0]?.message?.content?.trim() || '';
 }
 
 async function callOpenAI(apiKey, body) {
